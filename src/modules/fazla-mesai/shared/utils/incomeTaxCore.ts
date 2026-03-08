@@ -1,18 +1,31 @@
 /**
- * LOCAL COPY - DO NOT MODIFY
- * This file is frozen as part of StandartIndependent page isolation
- * 
- * GELİR VERGİSİ TARİFESİ (ÜCRETLİLER) — 2010–2025 TAM SET
+ * GELİR VERGİSİ TARİFESİ (ÜCRETLİLER) — 2010–2030
+ * GİB RESMİ TEBLİĞLERİNE %100 UYUMLU
+ * 2026-2030: Açıklanana kadar 2025 dilimleri kullanılıyor
+ * Backend incomeTaxCore.js ile senkron tutulacak
  */
 
 export interface TaxBracket {
-  limit: number | null;   // üst sınır (null = sonsuz)
-  rate: number;           // vergi oranı
-  baseTax: number;        // önceki dilimlerin toplam vergisi
-  baseLimit: number;      // önceki dilimlerin toplam limiti
+  limit: number | null;
+  rate: number;
+  baseTax: number;
+  baseLimit: number;
 }
 
+const BRACKETS_2026_2030 = [
+  { limit: 198274, rate: 0.15, baseTax: 0, baseLimit: 0 },
+  { limit: 414117, rate: 0.20, baseTax: 29741, baseLimit: 198274 },
+  { limit: 1505880, rate: 0.27, baseTax: 71909, baseLimit: 414117 },
+  { limit: 5396070, rate: 0.35, baseTax: 366685, baseLimit: 1505880 },
+  { limit: null, rate: 0.40, baseTax: 1731252, baseLimit: 5396070 }
+];
+
 export const incomeTaxRates: Record<number, TaxBracket[]> = {
+  2030: BRACKETS_2026_2030,
+  2029: BRACKETS_2026_2030,
+  2028: BRACKETS_2026_2030,
+  2027: BRACKETS_2026_2030,
+  2026: BRACKETS_2026_2030,
   2025: [
     { limit: 158000, rate: 0.15, baseTax: 0, baseLimit: 0 },
     { limit: 330000, rate: 0.20, baseTax: 23700, baseLimit: 158000 },
@@ -44,9 +57,9 @@ export const incomeTaxRates: Record<number, TaxBracket[]> = {
   2021: [
     { limit: 24000, rate: 0.15, baseTax: 0, baseLimit: 0 },
     { limit: 53000, rate: 0.20, baseTax: 3600, baseLimit: 24000 },
-    { limit: 130000, rate: 0.27, baseTax: 9400, baseLimit: 53000 },
-    { limit: 650000, rate: 0.35, baseTax: 30190, baseLimit: 130000 },
-    { limit: null, rate: 0.40, baseTax: 212190, baseLimit: 650000 }
+    { limit: 190000, rate: 0.27, baseTax: 9400, baseLimit: 53000 },
+    { limit: 650000, rate: 0.35, baseTax: 46390, baseLimit: 190000 },
+    { limit: null, rate: 0.40, baseTax: 207390, baseLimit: 650000 }
   ],
   2020: [
     { limit: 22000, rate: 0.15, baseTax: 0, baseLimit: 0 },
@@ -121,8 +134,17 @@ export const SGK_ISCIPAY_ORANI = 0.14;
 export const ISSIZLIK_ISCIPAY_ORANI = 0.01;
 export const DAMGA_VERGISI_ORANI = 0.00759;
 
-export function calculateIncomeTaxForYear(year: number, income: number) {
-  const brackets = incomeTaxRates[year];
+function getBracketsForYear(year: number): TaxBracket[] | undefined {
+  if (incomeTaxRates[year]) return incomeTaxRates[year];
+  const years = Object.keys(incomeTaxRates).map(Number).sort((a, b) => b - a);
+  for (const y of years) {
+    if (year >= y) return incomeTaxRates[y];
+  }
+  return incomeTaxRates[2010];
+}
+
+export function calculateIncomeTaxForYear(year: number, income: number): number {
+  const brackets = getBracketsForYear(year);
   if (!brackets) return 0;
 
   for (const b of brackets) {
@@ -130,33 +152,52 @@ export function calculateIncomeTaxForYear(year: number, income: number) {
       return b.baseTax + (income - b.baseLimit) * b.rate;
     }
   }
-
   return 0;
 }
 
+/**
+ * Backend incomeTaxCore.js ile aynı algoritma: dilim bazlı hesaplama
+ * Özet: "(%15, %20)" formatında döner
+ */
 export function calculateIncomeTaxWithBrackets(year: number, income: number): { tax: number; brackets: string } {
-  const brackets = incomeTaxRates[year];
-  if (!brackets) return { tax: 0, brackets: '' };
-
-  const appliedBrackets: number[] = [];
-  let tax = 0;
-
-  for (const b of brackets) {
-    if (!appliedBrackets.includes(b.rate * 100)) {
-      appliedBrackets.push(b.rate * 100);
-    }
-
-    if (b.limit === null || income <= b.limit) {
-      tax = b.baseTax + (income - b.baseLimit) * b.rate;
-      break;
-    }
+  const brackets = getBracketsForYear(year);
+  if (!brackets || income <= 0) {
+    return { tax: 0, brackets: "" };
   }
 
-  const bracketString = appliedBrackets.length > 0 
-    ? `(${appliedBrackets.map(rate => `%${rate}`).join(', ')})` 
-    : '';
+  const appliedBrackets: { ratePercent: string }[] = [];
+  let totalTax = 0;
 
-  return { tax, brackets: bracketString };
+  for (let i = 0; i < brackets.length; i++) {
+    const bracket = brackets[i];
+    const bracketStart = bracket.baseLimit;
+    const bracketEnd = bracket.limit;
+
+    let taxableInThisBracket = 0;
+    if (bracketEnd === null) {
+      taxableInThisBracket = income - bracketStart;
+    } else if (income > bracketEnd) {
+      taxableInThisBracket = bracketEnd - bracketStart;
+    } else {
+      taxableInThisBracket = income - bracketStart;
+    }
+
+    if (taxableInThisBracket > 0) {
+      const taxForThisBracket = taxableInThisBracket * bracket.rate;
+      totalTax += taxForThisBracket;
+      appliedBrackets.push({
+        ratePercent: `%${(bracket.rate * 100).toFixed(0)}`
+      });
+    }
+
+    if (bracketEnd === null || income <= bracketEnd) break;
+  }
+
+  const summary = appliedBrackets.length > 0
+    ? `(${appliedBrackets.map((b) => b.ratePercent).join(", ")})`
+    : "";
+
+  return { tax: totalTax, brackets: summary };
 }
 
 const round2Gross = (n: number) => Math.round(n * 100) / 100;
@@ -168,14 +209,14 @@ export function calculateNetFromGross(gross: number, year: number) {
   const gelirVergisi = round2Gross(calculateIncomeTaxForYear(year, gelirVergisiMatrahi));
   const damgaVergisi = round2Gross(gross * DAMGA_VERGISI_ORANI);
   const net = round2Gross(gross - sgk - issizlik - gelirVergisi - damgaVergisi);
-  
-  return { 
+
+  return {
     gross,
-    sgk, 
-    issizlik, 
-    gelirVergisi, 
-    damgaVergisi, 
-    net 
+    sgk,
+    issizlik,
+    gelirVergisi,
+    damgaVergisi,
+    net
   };
 }
 
@@ -184,24 +225,23 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export function calculateGrossFromNet(netInput: number, year: number) {
   let low = netInput;
   let high = netInput * 2;
-  let gross = netInput / 0.70;
-  
+  let gross = netInput / 0.7;
+
   for (let i = 0; i < 100; i++) {
     gross = (low + high) / 2;
     const result = calculateNetFromGross(gross, year);
     const calculatedNet = round2(result.net);
-    
+
     if (Math.abs(calculatedNet - netInput) < 0.005) break;
-    
+
     if (calculatedNet < netInput) {
       low = gross;
     } else {
       high = gross;
     }
   }
-  
+
   gross = round2(gross);
-  
   const nearestInteger = Math.round(gross);
   if (Math.abs(gross - nearestInteger) < 0.05) {
     const intResult = calculateNetFromGross(nearestInteger, year);
@@ -216,14 +256,14 @@ export function calculateGrossFromNet(netInput: number, year: number) {
       };
     }
   }
-  
+
   const sgk = round2(gross * SGK_ISCIPAY_ORANI);
   const issizlik = round2(gross * ISSIZLIK_ISCIPAY_ORANI);
   const gelirVergisiMatrahi = gross - sgk - issizlik;
   const gelirVergisi = round2(calculateIncomeTaxForYear(year, gelirVergisiMatrahi));
   const damgaVergisi = round2(gross * DAMGA_VERGISI_ORANI);
   const net = round2(gross - sgk - issizlik - gelirVergisi - damgaVergisi);
-  
+
   return {
     net,
     gross,

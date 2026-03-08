@@ -32,11 +32,13 @@ import { NotlarAccordion } from "../standart/NotlarAccordion";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
+import { calculateDailyWorkHours, computeBreakHours } from "../standart/utils";
 import { useTanikliStandartState } from "./state";
 import { fmt, fmtCurrency } from "../standart/calculations";
-import { FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI } from "../standart/constants";
+import { FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI, WEEKLY_WORK_LIMIT, STANDARD_DAILY_REFERENCE_HOURS } from "../standart/constants";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
-import { computeNetFromGrossSingle } from "@/pages/ucret-alacagi/UcretIndependent/localUtils/incomeTaxCore";
+import { calculateIncomeTaxWithBrackets } from "@modules/fazla-mesai/shared";
+import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 
 const PAGE_TITLE = "Tanıklı Standart Fazla Mesai Hesaplama";
 const RECORD_TYPE = "tanikli_standart_fazla_mesai";
@@ -67,7 +69,7 @@ export default function TanikliStandartPage() {
   const effectiveId = id || searchParams.get("caseId") || undefined;
   const pageStyle = usePageStyle();
   const { success, error: showToastError } = useToast();
-  const { kaydetAc } = useKaydetContext();
+  const { kaydetAc, isSaving } = useKaydetContext();
 
   const {
     formValues,
@@ -94,6 +96,8 @@ export default function TanikliStandartPage() {
   const [localIseGiris, setLocalIseGiris] = useState("");
   const [localIstenCikis, setLocalIstenCikis] = useState("");
   const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 7 gün seçiliyken Hafta Tatilsiz / Hafta Tatilli */
+  const [activeTab, setActiveTab] = useState<"tatilsiz" | "tatilli">("tatilsiz");
 
   const { iseGiris, istenCikis, weeklyDays, davaci, taniklar, mode270, katSayi, mahsuplasmaMiktari } = formValues;
 
@@ -105,6 +109,42 @@ export default function TanikliStandartPage() {
   useEffect(() => () => {
     if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!effectiveId) return;
+    let mounted = true;
+    yukleHesap(effectiveId, RECORD_TYPE)
+      .then((res) => {
+        if (!mounted) return;
+        if (!res.success) {
+          showToastError(res.error || "Kayıt yüklenemedi");
+          return;
+        }
+        if (!res.data) return;
+        const raw = res.data.form || res.data.formValues || res.data;
+        setFormValues((p) => ({
+          ...p,
+          ...(raw.iseGiris != null && { iseGiris: raw.iseGiris }),
+          ...(raw.istenCikis != null && { istenCikis: raw.istenCikis }),
+          ...(raw.weeklyDays != null && { weeklyDays: String(raw.weeklyDays) }),
+          ...(raw.davaci && { davaci: { ...p.davaci, ...raw.davaci } }),
+          ...(Array.isArray(raw.taniklar) && raw.taniklar.length > 0 && { taniklar: raw.taniklar }),
+          ...(raw.mode270 && { mode270: raw.mode270 }),
+          ...(raw.katSayi != null && { katSayi: raw.katSayi }),
+          ...(raw.mahsuplasmaMiktari != null && { mahsuplasmaMiktari: raw.mahsuplasmaMiktari }),
+          ...(Array.isArray(raw.exclusions) && { exclusions: raw.exclusions }),
+          ...(raw.zamanasimi != null && { zamanasimi: raw.zamanasimi }),
+        }));
+        if (Array.isArray(raw.manualRows)) setManualRows(raw.manualRows);
+        if (raw.rowOverrides && typeof raw.rowOverrides === "object") setRowOverrides(raw.rowOverrides);
+        if (res.name) setCurrentRecordName(res.name);
+        success("Kayıt yüklendi");
+      })
+      .catch((err) => {
+        if (mounted) showToastError(err.message || "Kayıt yüklenemedi");
+      });
+    return () => { mounted = false; };
+  }, [effectiveId, success, showToastError]);
 
   const debouncedSetDate = useCallback(
     (field: "iseGiris" | "istenCikis", value: string) => {
@@ -128,15 +168,62 @@ export default function TanikliStandartPage() {
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
 
-  const rows = useMemo(() => {
+  const splitWitnesses = useMemo(() => {
+    const valid = taniklar.filter((t) => t.dateIn && t.dateOut && t.in && t.out);
+    if (valid.length === 0) return [];
+    const sorted = [...valid].sort((a, b) => new Date(a.dateIn).getTime() - new Date(b.dateIn).getTime());
+    const out: Array<{ dateIn: string; dateOut: string; in: string; out: string }> = [];
+    sorted.forEach((witness, idx) => {
+      const wStart = new Date(witness.dateIn);
+      const wEnd = new Date(witness.dateOut);
+      const overlapping = sorted.filter((other, otherIdx) => {
+        if (otherIdx === idx) return false;
+        const oStart = new Date(other.dateIn);
+        const oEnd = new Date(other.dateOut);
+        return oStart > wStart && oStart < wEnd;
+      });
+      if (overlapping.length === 0) {
+        out.push({ dateIn: witness.dateIn, dateOut: witness.dateOut, in: witness.in, out: witness.out });
+        return;
+      }
+      let currentStart = wStart;
+      const sortedOverlaps = overlapping.sort((a, b) => new Date(a.dateIn).getTime() - new Date(b.dateIn).getTime());
+      sortedOverlaps.forEach((overlap) => {
+        const overlapStart = new Date(overlap.dateIn);
+        const overlapEnd = new Date(overlap.dateOut);
+        if (currentStart < overlapStart) {
+          const segmentEnd = new Date(overlapStart);
+          segmentEnd.setDate(segmentEnd.getDate() - 1);
+          if (segmentEnd >= currentStart) {
+            out.push({
+              dateIn: currentStart.toISOString().slice(0, 10),
+              dateOut: segmentEnd.toISOString().slice(0, 10),
+              in: witness.in,
+              out: witness.out,
+            });
+          }
+        }
+        const nextStart = new Date(overlapEnd);
+        nextStart.setDate(nextStart.getDate() + 1);
+        currentStart = nextStart;
+      });
+      if (currentStart <= wEnd) {
+        out.push({
+          dateIn: currentStart.toISOString().slice(0, 10),
+          dateOut: wEnd.toISOString().slice(0, 10),
+          in: witness.in,
+          out: witness.out,
+        });
+      }
+    });
+    return out;
+  }, [taniklar]);
+
+  const fmTextData = useMemo(() => {
     const davaciDateIn = iseGiris || davaci?.dateIn || "";
     const davaciDateOut = istenCikis || davaci?.dateOut || "";
-    if (!davaciDateIn || !davaciDateOut || !davaci?.in || !davaci?.out) return [];
-
-    const validWitnesses = taniklar.filter(
-      (t) => t.dateIn && t.dateOut && t.in && t.out
-    );
-    if (validWitnesses.length === 0) return [];
+    if (!davaciDateIn || !davaciDateOut || !davaci?.in || !davaci?.out) return { results: [] };
+    if (splitWitnesses.length === 0) return { results: [] };
 
     const davaciForInterval = {
       startDate: davaciDateIn,
@@ -145,17 +232,159 @@ export default function TanikliStandartPage() {
       endTime: davaci.out,
       haftalikGunSayisi: Number(weeklyDays) || 6,
     };
-    const witnessesForInterval = validWitnesses.map((t) => ({
-      dateIn: t.dateIn,
-      dateOut: t.dateOut,
-      in: t.in,
-      out: t.out,
-    }));
+    const hg = Number(weeklyDays) || 6;
+    const sevenDayMode = hg === 7 ? activeTab : undefined;
+    const intervals = generateDynamicIntervalsFromWitnesses(davaciForInterval, splitWitnesses);
+    if (!intervals?.length) return { results: [] };
+    return calculateOvertimeHours(intervals, { sevenDayMode });
+  }, [iseGiris, istenCikis, davaci, splitWitnesses, weeklyDays, activeTab]);
 
-    const intervals = generateDynamicIntervalsFromWitnesses(davaciForInterval, witnessesForInterval);
+  /** Eski yapı: DAVACI + her TANIK için ayrı kart (tanık ismi ile) */
+  const fmPeriods = useMemo(() => {
+    const result: Array<{ label: string; text: string; fmHours: number }> = [];
+    const fmtH = (n: number) => String(n ?? 0).replace(".", ",");
+    const davaciDateIn = iseGiris || davaci?.dateIn || "";
+    const davaciDateOut = istenCikis || davaci?.dateOut || "";
+    const inT = davaci?.in || "";
+    const outT = davaci?.out || "";
+
+    if (!inT || !outT) {
+      if (davaciDateIn || davaciDateOut) {
+        return [{ label: "Davacı", text: "Davacı tarih bilgisi girildi. Hesaplama için giriş ve çıkış saatlerini giriniz.", fmHours: 0 }];
+      }
+      return [{ label: "Davacı", text: "Davacı için tarih ve saat bilgilerini giriniz.", fmHours: 0 }];
+    }
+
+    const brut = calculateDailyWorkHours(inT, outT);
+    const brk = computeBreakHours(brut);
+    const netGunluk = Math.max(0, brut - brk);
+    const hg = Number(weeklyDays) || 6;
+
+    let davaciText: string;
+    let davaciWeeklyFM: number;
+    if (hg === 7 && activeTab === "tatilli") {
+      const weeklyNormal = 6 * netGunluk;
+      const extraHT = Math.max(0, netGunluk - STANDARD_DAILY_REFERENCE_HOURS);
+      const toplamCalisma = weeklyNormal + extraHT;
+      const roundedWeekly = Math.round(toplamCalisma);
+      davaciWeeklyFM = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `6 x ${fmtH(netGunluk)} = ${fmtH(weeklyNormal)} saat çalışma\n` +
+        `${fmtH(netGunluk)} - 7,5 = ${fmtH(extraHT)} saat hafta tatili fazla çalışma\n` +
+        `= ${fmtH(toplamCalisma)} saat haftalık çalışma\n` +
+        `- 45 saat haftalık çalışma saati\n` +
+        `= ${davaciWeeklyFM} saat haftalık fazla mesai`;
+    } else if (hg === 7 && activeTab === "tatilsiz") {
+      const weeklyTotal = netGunluk * 7;
+      const roundedWeekly = Math.round(weeklyTotal);
+      davaciWeeklyFM = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `7 x ${fmtH(netGunluk)} = ${fmtH(weeklyTotal)} saat çalışma\n` +
+        `= ${roundedWeekly} saat haftalık çalışma\n` +
+        `- 45 saat haftalık çalışma saati\n` +
+        `= ${davaciWeeklyFM} saat haftalık fazla mesai`;
+    } else {
+      const weeklyTotal = netGunluk * hg;
+      const roundedWeekly = Math.round(weeklyTotal);
+      davaciWeeklyFM = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `${hg} x ${fmtH(netGunluk)} = ${fmtH(weeklyTotal)} saat çalışma\n` +
+        `= ${roundedWeekly} saat haftalık çalışma\n` +
+        `- 45 saat haftalık çalışma saati\n` +
+        `= ${davaciWeeklyFM} saat haftalık fazla mesai`;
+    }
+    result.push({ label: "Davacı", text: davaciText, fmHours: davaciWeeklyFM });
+
+    const [dGirH, dGirM] = inT.split(":").map(Number);
+    const [dCikH, dCikM] = outT.split(":").map(Number);
+    const dGirMinutes = dGirH * 60 + dGirM;
+    const dCikMinutes = dCikH * 60 + dCikM;
+
+    taniklar.forEach((tanik, idx) => {
+      if (!tanik.dateIn || !tanik.dateOut || !tanik.in || !tanik.out) return;
+      const [tGirH, tGirM] = tanik.in.split(":").map(Number);
+      const [tCikH, tCikM] = tanik.out.split(":").map(Number);
+      let tGirMinutes = tGirH * 60 + tGirM;
+      let tCikMinutes = tCikH * 60 + tCikM;
+      tGirMinutes = Math.max(tGirMinutes, dGirMinutes);
+      tCikMinutes = Math.min(tCikMinutes, dCikMinutes);
+      const tDailyBrut = Math.max(0, (tCikMinutes - tGirMinutes) / 60);
+      const tBrk = computeBreakHours(tDailyBrut);
+      const tDailyNet = Math.max(0, tDailyBrut - tBrk);
+      const kesikGir = `${String(Math.floor(tGirMinutes / 60)).padStart(2, "0")}:${String(tGirMinutes % 60).padStart(2, "0")}`;
+      const kesikCik = `${String(Math.floor(tCikMinutes / 60)).padStart(2, "0")}:${String(tCikMinutes % 60).padStart(2, "0")}`;
+
+      const tanikName = (tanik.name?.trim() || `TANIK ${idx + 1}`).toUpperCase();
+      const tWorkDays = hg;
+
+      let tanikText: string;
+      let tWeeklyFM: number;
+      if (tWorkDays === 7 && activeTab === "tatilli") {
+        const weeklyNormal = 6 * tDailyNet;
+        const holidayOvertime = Math.max(0, tDailyNet - STANDARD_DAILY_REFERENCE_HOURS);
+        const weeklyTotal = weeklyNormal + holidayOvertime;
+        const roundedWeekly = Math.round(weeklyTotal);
+        tWeeklyFM = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
+        tanikText =
+          `${tanikName}:\n` +
+          `${kesikGir} - ${kesikCik} = ${fmtH(tDailyBrut)} saat çalışma\n` +
+          `- ${fmtH(tBrk)} saat ara dinlenme\n` +
+          `= ${fmtH(tDailyNet)} saat günlük çalışma\n` +
+          `6 x ${fmtH(tDailyNet)} = ${fmtH(weeklyNormal)} saat çalışma\n` +
+          `${fmtH(tDailyNet)} - 7,5 = ${fmtH(holidayOvertime)} saat hafta tatili fazla çalışma\n` +
+          `= ${fmtH(weeklyTotal)} saat çalışma\n` +
+          `Net haftalık çalışma = ${roundedWeekly} saat,\n` +
+          `${roundedWeekly} – 45 saat yasal haftalık çalışma = ${tWeeklyFM} saat haftalık fazla mesai`;
+      } else {
+        const tWeeklyTotal = tDailyNet * tWorkDays;
+        const roundedWeekly = Math.round(tWeeklyTotal);
+        tWeeklyFM = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
+        tanikText =
+          `${tanikName}:\n` +
+          `${kesikGir} - ${kesikCik} = ${fmtH(tDailyBrut)} saat çalışma\n` +
+          `- ${fmtH(tBrk)} saat ara dinlenme\n` +
+          `= ${fmtH(tDailyNet)} saat günlük çalışma\n` +
+          `${tWorkDays} x ${fmtH(tDailyNet)} = ${fmtH(tWeeklyTotal)} saat çalışma\n` +
+          `Net haftalık çalışma = ${roundedWeekly} saat,\n` +
+          `${roundedWeekly} – 45 saat yasal haftalık çalışma = ${tWeeklyFM} saat haftalık fazla mesai`;
+      }
+      result.push({ label: tanikName, text: tanikText, fmHours: tWeeklyFM });
+    });
+
+    return result;
+  }, [iseGiris, istenCikis, davaci, taniklar, weeklyDays, activeTab]);
+
+  const rows = useMemo(() => {
+    const davaciDateIn = iseGiris || davaci?.dateIn || "";
+    const davaciDateOut = istenCikis || davaci?.dateOut || "";
+    if (!davaciDateIn || !davaciDateOut || !davaci?.in || !davaci?.out) return [];
+    if (splitWitnesses.length === 0) return [];
+
+    const davaciForInterval = {
+      startDate: davaciDateIn,
+      endDate: davaciDateOut,
+      startTime: davaci.in,
+      endTime: davaci.out,
+      haftalikGunSayisi: Number(weeklyDays) || 6,
+    };
+    const hg = Number(weeklyDays) || 6;
+    const sevenDayMode = hg === 7 ? activeTab : undefined;
+    const intervals = generateDynamicIntervalsFromWitnesses(davaciForInterval, splitWitnesses);
     if (!intervals?.length) return [];
 
-    const { results } = calculateOvertimeHours(intervals);
+    const { results } = calculateOvertimeHours(intervals, { sevenDayMode });
     const tableRows: Array<Record<string, unknown> & FazlaMesaiRowBase> = [];
 
     results.forEach((res: { start: string; end: string; fazlaMesai?: number }, resIdx: number) => {
@@ -207,8 +436,9 @@ export default function TanikliStandartPage() {
     iseGiris,
     istenCikis,
     davaci,
-    taniklar,
+    splitWitnesses,
     weeklyDays,
+    activeTab,
     katSayi,
     zamanasimiBaslangic,
   ]);
@@ -255,12 +485,20 @@ export default function TanikliStandartPage() {
   );
   const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
-    if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0 };
-    const res = computeNetFromGrossSingle(totalBrut, exitYear);
+    if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
+    const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
+    const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
+    const sskPrim = totalBrut * 0.15;
+    const matrah = Math.max(0, totalBrut - sskPrim);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
+    const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
+    const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
     return {
-      gelirVergisi: res.totalGelirVergisi,
-      damgaVergisi: res.totalDamgaVergisi,
-      netYillik: res.totalNet,
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets || "",
     };
   }, [totalBrut, exitYear]);
 
@@ -270,9 +508,8 @@ export default function TanikliStandartPage() {
     return Number.isFinite(n) ? n : 0;
   }, [mahsuplasmaMiktari]);
 
-  const netAlacak = brutNetResult.netYillik;
-  const hakkaniyetIndirimi = netAlacak / 3;
-  const sonNet = Math.max(0, netAlacak - hakkaniyetIndirimi - mahsupNum);
+  const hakkaniyetIndirimi = totalBrut / 3;
+  const sonNet = Math.max(0, totalBrut - hakkaniyetIndirimi - mahsupNum);
   const hasCustomKatsayi = (katSayi ?? 1) !== 1 && (katSayi ?? 1) > 0;
 
   const handleFormChange = useCallback(
@@ -348,8 +585,17 @@ export default function TanikliStandartPage() {
 
   const handleSave = useCallback(() => {
     kaydetAc({
-      type: RECORD_TYPE,
-      data: {
+      hesapTuru: RECORD_TYPE,
+      veri: {
+        data: {
+          form: formValues,
+          results: {
+            rows: computedDisplayRows,
+            totalBrut,
+            totalNet: brutNetResult.netYillik,
+            weeklyFMHours: rows.length > 0 ? (rows[0].fmHours ?? 0) : 0,
+          },
+        },
         formValues,
         totals: { toplam: totalBrut, yil: diff.years, ay: diff.months, gun: diff.days },
         brut_total: totalBrut,
@@ -359,12 +605,15 @@ export default function TanikliStandartPage() {
         katSayi,
         mahsuplasmaMiktari,
       },
-      name: currentRecordName || undefined,
-      id: effectiveId || undefined,
+      mevcutId: effectiveId || undefined,
+      mevcutKayitAdi: currentRecordName || undefined,
+      redirectPath: "/fazla-mesai/tanikli-standart/:id",
     });
   }, [
     kaydetAc,
     formValues,
+    computedDisplayRows,
+    rows,
     totalBrut,
     brutNetResult.netYillik,
     diff,
@@ -437,7 +686,7 @@ export default function TanikliStandartPage() {
       { label: "Brüt Fazla Mesai", value: fmtCurrency(totalBrut) },
       { label: "SGK (%14)", value: `-${fmtCurrency(totalBrut * SSK_ORAN)}` },
       { label: "İşsizlik (%1)", value: `-${fmtCurrency(totalBrut * ISSIZLIK_ORAN)}` },
-      { label: "Gelir Vergisi", value: `-${fmtCurrency(brutNetResult.gelirVergisi)}` },
+      { label: `Gelir Vergisi ${brutNetResult.gelirVergisiDilimleri || ""}`, value: `-${fmtCurrency(brutNetResult.gelirVergisi)}` },
       { label: "Damga Vergisi (Binde 7,59)", value: `-${fmtCurrency(brutNetResult.damgaVergisi)}` },
       { label: "Net Fazla Mesai", value: fmtCurrency(brutNetResult.netYillik) },
     ];
@@ -451,7 +700,7 @@ export default function TanikliStandartPage() {
 
     if (mahsupNum > 0) {
       const mahsupRows: { label: string; value: string }[] = [
-        { label: "Net Alacak", value: fmtCurrency(netAlacak) },
+        { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
         { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
@@ -475,7 +724,6 @@ export default function TanikliStandartPage() {
     totalBrut,
     brutNetResult,
     mahsupNum,
-    netAlacak,
     hakkaniyetIndirimi,
     sonNet,
     exclusions,
@@ -618,7 +866,16 @@ export default function TanikliStandartPage() {
                     key={t.id}
                     className="flex flex-wrap gap-2 items-end p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
                   >
-                    <span className="text-xs font-medium text-gray-500 w-full sm:w-auto">Tanık {idx + 1}</span>
+                    <div className="w-full sm:w-40">
+                      <label className={labelCls}>İsim</label>
+                      <input
+                        type="text"
+                        value={t.name ?? ""}
+                        onChange={(e) => updateWitness(t.id, { name: e.target.value })}
+                        placeholder={`Tanık ${idx + 1}`}
+                        className={inputCls}
+                      />
+                    </div>
                     <div className="flex-1 min-w-[100px]">
                       <label className={labelCls}>Başlangıç</label>
                       <input
@@ -667,6 +924,71 @@ export default function TanikliStandartPage() {
                   </div>
                 ))}
               </div>
+            </section>
+
+            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
+              <details className="group" open>
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between list-none">
+                  <span>Metin Hesaplaması</span>
+                  <svg
+                    className="w-4 h-4 transition-transform group-open:rotate-180"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </summary>
+                <div className="p-4">
+                  <p className="text-xs text-red-600 dark:text-red-400 font-medium mb-3">
+                    Hesaplamalar tanık kesişim dönemleri ve asgari ücret dönemlerine göre yapılmıştır
+                  </p>
+                  {Number(weeklyDays) === 7 && (
+                    <div className="flex gap-2 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("tatilsiz")}
+                        className={`px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                          activeTab === "tatilsiz"
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600"
+                        }`}
+                      >
+                        Hafta Tatilsiz
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("tatilli")}
+                        className={`px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                          activeTab === "tatilli"
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600"
+                        }`}
+                      >
+                        Hafta Tatilli
+                      </button>
+                    </div>
+                  )}
+                  <div className="bg-[#f1f3f5] dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                    {fmPeriods.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {fmPeriods.map((p, idx) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-lg border bg-white dark:bg-gray-800 shadow-sm text-xs leading-snug whitespace-pre-line text-gray-800 dark:text-gray-200"
+                          >
+                            {p.text}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Giriş/çıkış saatlerini giriniz.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </details>
             </section>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
@@ -839,7 +1161,7 @@ export default function TanikliStandartPage() {
                                 onChange={(e) =>
                                   handleRowOverride(r.id, { startISO: e.target.value || undefined })
                                 }
-                                className={`${tableInputCls} flex-1 min-w-0`}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
                               />
                               <span className="text-gray-400 shrink-0">–</span>
                               <input
@@ -848,7 +1170,7 @@ export default function TanikliStandartPage() {
                                 onChange={(e) =>
                                   handleRowOverride(r.id, { endISO: e.target.value || undefined })
                                 }
-                                className={`${tableInputCls} flex-1 min-w-0`}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
                               />
                             </div>
                           </td>
@@ -971,7 +1293,7 @@ export default function TanikliStandartPage() {
                   <span>-{fmtCurrency(totalBrut * ISSIZLIK_ORAN)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400">
-                  <span>Gelir Vergisi</span>
+                  <span>Gelir Vergisi {brutNetResult.gelirVergisiDilimleri}</span>
                   <span>-{fmtCurrency(brutNetResult.gelirVergisi)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400">
@@ -991,8 +1313,8 @@ export default function TanikliStandartPage() {
               </h2>
               <div className="divide-y divide-gray-200 dark:divide-gray-600 text-sm">
                 <div className="flex justify-between py-1.5">
-                  <span>Net Alacak</span>
-                  <span className="font-medium">{fmtCurrency(netAlacak)}</span>
+                  <span>Toplam Fazla Mesai (Brüt)</span>
+                  <span className="font-medium">{fmtCurrency(totalBrut)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400">
                   <span>1/3 Hakkaniyet İndirimi</span>
@@ -1084,7 +1406,8 @@ export default function TanikliStandartPage() {
       <FooterActions
         replacePrintWith={{ label: "Yeni Hesapla", onClick: handleNew }}
         onSave={handleSave}
-        saveLabel="Kaydet"
+        saveLabel={isSaving ? (effectiveId ? "Güncelleniyor..." : "Kaydediliyor...") : (effectiveId ? "Güncelle" : "Kaydet")}
+        saveButtonProps={{ disabled: isSaving }}
         onPrint={handlePrint}
         previewButton={{
           title: PAGE_TITLE,

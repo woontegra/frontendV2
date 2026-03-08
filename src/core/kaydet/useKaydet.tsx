@@ -6,7 +6,7 @@
 import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/context/ToastContext";
-import { kaydetHesap, type HesapTuru, type KayitSonucu } from "./kaydetServisi";
+import { kaydetHesap, yukleHesap, type HesapTuru, type KayitSonucu } from "./kaydetServisi";
 import KaydetModal from "./kaydetModal";
 
 interface KaydetOptions {
@@ -82,18 +82,37 @@ export function useKaydet() {
 
   /**
    * Kayıt modal'ını açar veya direkt kayıt yapar
-   * @param options - Kayıt seçenekleri
+   * @param options - Kayıt seçenekleri (hesapTuru/veri veya type/data/name/id uyumluluğu)
    */
-  const kaydetAc = useCallback((options: KaydetOptions) => {
-    // Eğer mevcutId varsa ve mevcut kayıt adı varsa, modal açmadan direkt güncelleme yap
-    if (options.mevcutId && options.mevcutKayitAdi) {
-      // Direkt kayıt yap (güncelleme)
-      performKaydetInternal(options.mevcutKayitAdi, options);
+  const kaydetAc = useCallback(async (options: KaydetOptions & { type?: string; data?: any; name?: string; id?: string }) => {
+    // Eski format (type, data, name, id) → yeni format (hesapTuru, veri, mevcutKayitAdi, mevcutId)
+    const normalized: KaydetOptions = {
+      hesapTuru: options.hesapTuru || options.type || "",
+      veri: options.veri ?? options.data ?? {},
+      mevcutId: options.mevcutId ?? options.id ?? undefined,
+      mevcutKayitAdi: options.mevcutKayitAdi ?? options.name ?? undefined,
+      redirectPath: options.redirectPath,
+      onSuccess: options.onSuccess,
+      onError: options.onError,
+    };
+    if (!normalized.hesapTuru || !normalized.veri) return;
+    // Mevcut kayıt varsa (mevcutId) → güncelleme yap (isim varsa direkt, yoksa API'den al)
+    if (normalized.mevcutId) {
+      let kayitAdi = normalized.mevcutKayitAdi;
+      if (!kayitAdi) {
+        // İsim yoksa API'den mevcut kaydı al (sayfa load etmemiş olabilir)
+        try {
+          const loaded = await yukleHesap(normalized.mevcutId, normalized.hesapTuru);
+          kayitAdi = loaded.success && loaded.name ? loaded.name : "Mevcut Kayıt";
+        } catch {
+          kayitAdi = "Mevcut Kayıt";
+        }
+      }
+      performKaydetInternal(kayitAdi, normalized);
       return;
     }
-    
-    // Yeni kayıt veya isim yoksa modal aç
-    setCurrentOptions(options);
+    // Yeni kayıt → modal aç
+    setCurrentOptions(normalized);
     setIsModalOpen(true);
   }, [performKaydetInternal]);
 

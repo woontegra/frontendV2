@@ -31,7 +31,7 @@ import {
   handleCalculateTotalBrut,
   prepareSaveData,
 } from "./actions";
-import { computeNetFromGrossSingle, computeGrossFromNetSingle } from "@/pages/ucret-alacagi/UcretIndependent/localUtils/incomeTaxCore";
+import { computeNetFromGrossSingle, computeGrossFromNetSingle, calculateIncomeTaxWithBrackets } from "@/pages/ucret-alacagi/UcretIndependent/localUtils/incomeTaxCore";
 import { fmtCurrency, parseNum } from "./calculations";
 import { fmtCurrency as fmt, parseNum as parseNumUtil } from "./utils";
 import type { ExtraItem } from "./contract";
@@ -214,12 +214,14 @@ function DavaciUcretiPageContent() {
   useEffect(() => {
     if (totalBrut > 0) {
       const d = computeNetFromGrossSingle(totalBrut, selectedYear, selectedPeriod);
+      const matrah = totalBrut - d.totalSgk - d.totalIssizlik;
+      const bracketResult = calculateIncomeTaxWithBrackets(selectedYear, matrah);
       setNetFromGross({
         gross: d.totalGross,
         sgk: d.totalSgk,
         issizlik: d.totalIssizlik,
         gelirVergisi: d.totalGelirVergisi,
-        gelirVergisiDilimleri: "",
+        gelirVergisiDilimleri: bracketResult.summary,
         damgaVergisi: d.totalDamgaVergisi,
         net: d.totalNet,
         gelirVergisiBrut: d.totalGelirVergisiBrut,
@@ -247,6 +249,8 @@ function DavaciUcretiPageContent() {
       return { net: 0, gross: 0, sgk: 0, issizlik: 0, gelirVergisi: 0, gelirVergisiBrut: 0, gelirVergisiIstisna: 0, gelirVergisiDilimleri: "", damgaVergisi: 0, damgaVergisiBrut: 0, damgaVergisiIstisna: 0 };
     }
     const d = computeGrossFromNetSingle(netVal, selectedYear, selectedPeriod);
+    const matrah = d.totalGross - d.totalSgk - d.totalIssizlik;
+    const bracketResult = calculateIncomeTaxWithBrackets(selectedYear, matrah);
     return {
       net: d.totalNet,
       gross: d.totalGross,
@@ -255,7 +259,7 @@ function DavaciUcretiPageContent() {
       gelirVergisi: d.totalGelirVergisi,
       gelirVergisiBrut: d.totalGelirVergisiBrut,
       gelirVergisiIstisna: d.totalGelirVergisiIstisna,
-      gelirVergisiDilimleri: "",
+      gelirVergisiDilimleri: bracketResult.summary,
       damgaVergisi: d.totalDamgaVergisi,
       damgaVergisiBrut: d.totalDamgaVergisiBrut,
       damgaVergisiIstisna: d.totalDamgaVergisiIstisna,
@@ -921,7 +925,7 @@ function DavaciUcretiPageContent() {
         replacePrintWith={{ label: "Yeni Hesapla", onClick: handleNew }}
         onSave={handleSave}
         saveButtonProps={{ disabled: isSaving }}
-        saveLabel={isSaving ? "Kaydediliyor..." : "Kaydet"}
+        saveLabel={isSaving ? (effectiveId ? "Güncelleniyor..." : "Kaydediliyor...") : (effectiveId ? "Güncelle" : "Kaydet")}
         onPrint={handlePrint}
         previewButton={{
           title: PAGE_TITLE,

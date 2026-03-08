@@ -49,6 +49,26 @@ function calculateIncomeTax(year: number, income: number): number {
   return 0;
 }
 
+/**
+ * Toplam brüt ücrete göre kesilecek gelir vergisinin kademeli oranını döndürür.
+ * Matrah = brüt - SGK - işsizlik. Bu matrahın hangi dilim(ler)e düştüğünü gösterir.
+ */
+export function calculateIncomeTaxWithBrackets(year: number, matrah: number): { tax: number; summary: string } {
+  const brackets = getRatesForYear(year);
+  const appliedRates: number[] = [];
+  let tax = 0;
+  for (const b of brackets) {
+    const ratePct = Math.round(b.rate * 100);
+    if (!appliedRates.includes(ratePct)) appliedRates.push(ratePct);
+    if (b.limit === null || matrah <= b.limit) {
+      tax = b.baseTax + (matrah - b.baseLimit) * b.rate;
+      break;
+    }
+  }
+  const summary = appliedRates.length > 0 ? `(${appliedRates.map((r) => `%${r}`).join(", ")})` : "";
+  return { tax, summary };
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Tek seferlik tutar için gelir vergisi (matrah = tutar). İhbar/kıdem tazminatı için. */

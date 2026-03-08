@@ -5,6 +5,7 @@ export type Mode270 = "none" | "simple" | "detailed";
 
 export interface Witness {
   id: string;
+  name?: string;
   dateIn: string;
   dateOut: string;
   in: string;

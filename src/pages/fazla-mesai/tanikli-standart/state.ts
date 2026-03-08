@@ -5,6 +5,7 @@ import type { CalculationRow, FormValues } from "./contract";
 function createWitness(): FormValues["taniklar"][0] {
   return {
     id: `tanik-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: "",
     dateIn: "",
     dateOut: "",
     in: "",

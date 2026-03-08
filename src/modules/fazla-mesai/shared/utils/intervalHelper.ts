@@ -487,12 +487,14 @@ export function generateDynamicIntervalsFromWitnesses(davaci: any, witnesses: an
   return final as any[];
 }
 
+const WEEKLY_WORK_LIMIT = 45; // İş Kanunu md.63 - haftalık çalışma 45 saati aşamaz
+
 // Calculate weekly overtime per interval using 45h rule
 export function calculateOvertimeHours(
-  intervals: Array<{ start: string; end: string; start_time: string; end_time: string; haftalikGun: number; claimant_start_time?: string; claimant_end_time?: string }>
+  intervals: Array<{ start: string; end: string; start_time: string; end_time: string; haftalikGun: number; claimant_start_time?: string; claimant_end_time?: string }>,
+  options?: { sevenDayMode?: "tatilsiz" | "tatilli" }
 ) {
   const round2 = (n: number) => Number((n ?? 0).toFixed(2));
-  const NORMAL = 48; // Günlük çalışanlar için haftalık çalışma limiti 48 saat
 
   const sorted = [...(intervals || [])].sort((a, b) => (a.start || "").localeCompare(b.start || ""));
 
@@ -525,8 +527,15 @@ export function calculateOvertimeHours(
     const breakHours = computeBreakHours(gunlukBrut);
     const gunluk = Math.max(0, gunlukBrut - breakHours);
     const haftalikGun = parseInt(String(it.haftalikGun ?? 6), 10);
-    const haftalik = gunluk * haftalikGun;
-    const fm = Math.max(0, haftalik - NORMAL);
+    let haftalik: number;
+    if (haftalikGun === 7 && options?.sevenDayMode === "tatilli") {
+      const weeklyNormal = 6 * gunluk;
+      const holidayOvertime = Math.max(0, gunluk - 7.5);
+      haftalik = weeklyNormal + holidayOvertime;
+    } else {
+      haftalik = gunluk * haftalikGun;
+    }
+    const fm = Math.max(0, haftalik - WEEKLY_WORK_LIMIT);
 
     return {
       start: it.start,

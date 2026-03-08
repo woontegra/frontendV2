@@ -36,7 +36,8 @@ import { useStandartFazlaMesaiState } from "./state";
 import { fmt, fmtCurrency } from "./calculations";
 import { WEEKLY_WORK_LIMIT, FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI } from "./constants";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
-import { computeNetFromGrossSingle } from "@/pages/ucret-alacagi/UcretIndependent/localUtils/incomeTaxCore";
+import { calculateIncomeTaxWithBrackets } from "@modules/fazla-mesai/shared";
+import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 
 const PAGE_TITLE = "Standart Fazla Mesai Hesaplama";
 const RECORD_TYPE = "fazla_mesai_standart";
@@ -68,7 +69,7 @@ export default function StandartFazlaMesaiPage() {
   const effectiveId = id || searchParams.get("caseId") || undefined;
   const pageStyle = usePageStyle();
   const { success, error: showToastError } = useToast();
-  const { kaydetAc } = useKaydetContext();
+  const { kaydetAc, isSaving } = useKaydetContext();
 
   const {
     formValues,
@@ -106,6 +107,41 @@ export default function StandartFazlaMesaiPage() {
   useEffect(() => () => {
     if (dateDebounceRef.current) clearTimeout(dateDebounceRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!effectiveId) return;
+    let mounted = true;
+    yukleHesap(effectiveId, RECORD_TYPE)
+      .then((res) => {
+        if (!mounted) return;
+        if (!res.success) {
+          showToastError(res.error || "Kayıt yüklenemedi");
+          return;
+        }
+        if (!res.data) return;
+        const raw = res.data.form || res.data.formValues || res.data;
+        setFormValues((p) => ({
+          ...p,
+          ...(raw.iseGiris != null && { iseGiris: raw.iseGiris }),
+          ...(raw.istenCikis != null && { istenCikis: raw.istenCikis }),
+          ...(raw.weeklyDays != null && { weeklyDays: String(raw.weeklyDays) }),
+          ...(raw.davaci && { davaci: { ...p.davaci, ...raw.davaci } }),
+          ...(raw.mode270 && { mode270: raw.mode270 }),
+          ...(raw.katSayi != null && { katSayi: raw.katSayi }),
+          ...(raw.mahsuplasmaMiktari != null && { mahsuplasmaMiktari: raw.mahsuplasmaMiktari }),
+          ...(Array.isArray(raw.exclusions) && { exclusions: raw.exclusions }),
+          ...(raw.zamanasimi != null && { zamanasimi: raw.zamanasimi }),
+        }));
+        if (Array.isArray(raw.manualRows)) setManualRows(raw.manualRows);
+        if (raw.rowOverrides && typeof raw.rowOverrides === "object") setRowOverrides(raw.rowOverrides);
+        if (res.name) setCurrentRecordName(res.name);
+        success("Kayıt yüklendi");
+      })
+      .catch((err) => {
+        if (mounted) showToastError(err.message || "Kayıt yüklenemedi");
+      });
+    return () => { mounted = false; };
+  }, [effectiveId, success, showToastError]);
 
   const debouncedSetDate = useCallback(
     (field: "iseGiris" | "istenCikis", value: string) => {
@@ -257,12 +293,20 @@ export default function StandartFazlaMesaiPage() {
 
   const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
-    if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0 };
-    const res = computeNetFromGrossSingle(totalBrut, exitYear);
+    if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
+    const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
+    const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
+    const sskPrim = totalBrut * 0.15;
+    const matrah = Math.max(0, totalBrut - sskPrim);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
+    const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
+    const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
     return {
-      gelirVergisi: res.totalGelirVergisi,
-      damgaVergisi: res.totalDamgaVergisi,
-      netYillik: res.totalNet,
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets || "",
     };
   }, [totalBrut, exitYear]);
 
@@ -272,9 +316,8 @@ export default function StandartFazlaMesaiPage() {
     return Number.isFinite(n) ? n : 0;
   }, [mahsuplasmaMiktari]);
 
-  const netAlacak = brutNetResult.netYillik;
-  const hakkaniyetIndirimi = netAlacak / 3;
-  const sonNet = Math.max(0, netAlacak - hakkaniyetIndirimi - mahsupNum);
+  const hakkaniyetIndirimi = totalBrut / 3;
+  const sonNet = Math.max(0, totalBrut - hakkaniyetIndirimi - mahsupNum);
 
   const hasCustomKatsayi = (katSayi ?? 1) !== 1 && (katSayi ?? 1) > 0;
 
@@ -443,7 +486,7 @@ export default function StandartFazlaMesaiPage() {
       { label: "Brüt Fazla Mesai", value: fmtCurrency(totalBrut) },
       { label: "SGK (%14)", value: `-${fmtCurrency(totalBrut * SSK_ORAN)}` },
       { label: "İşsizlik (%1)", value: `-${fmtCurrency(totalBrut * ISSIZLIK_ORAN)}` },
-      { label: "Gelir Vergisi", value: `-${fmtCurrency(brutNetResult.gelirVergisi)}` },
+      { label: `Gelir Vergisi ${brutNetResult.gelirVergisiDilimleri || ""}`, value: `-${fmtCurrency(brutNetResult.gelirVergisi)}` },
       { label: "Damga Vergisi (Binde 7,59)", value: `-${fmtCurrency(brutNetResult.damgaVergisi)}` },
       { label: "Net Fazla Mesai", value: fmtCurrency(brutNetResult.netYillik) },
     ];
@@ -457,7 +500,7 @@ export default function StandartFazlaMesaiPage() {
 
     if (mahsupNum > 0) {
       const mahsupRows: { label: string; value: string }[] = [
-        { label: "Net Alacak", value: fmtCurrency(netAlacak) },
+        { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
         { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
@@ -481,7 +524,6 @@ export default function StandartFazlaMesaiPage() {
     totalBrut,
     brutNetResult,
     mahsupNum,
-    netAlacak,
     hakkaniyetIndirimi,
     sonNet,
     exclusions,
@@ -856,7 +898,7 @@ export default function StandartFazlaMesaiPage() {
               <div className="flex justify-between py-1.5"><span>Brüt Fazla Mesai</span><span>{fmtCurrency(totalBrut)}</span></div>
               <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>SGK (%14)</span><span>-{fmtCurrency(totalBrut * SSK_ORAN)}</span></div>
               <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>İşsizlik (%1)</span><span>-{fmtCurrency(totalBrut * ISSIZLIK_ORAN)}</span></div>
-              <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>Gelir Vergisi</span><span>-{fmtCurrency(brutNetResult.gelirVergisi)}</span></div>
+              <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>Gelir Vergisi {brutNetResult.gelirVergisiDilimleri}</span><span>-{fmtCurrency(brutNetResult.gelirVergisi)}</span></div>
               <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>Damga Vergisi (Binde 7,59)</span><span>-{fmtCurrency(brutNetResult.damgaVergisi)}</span></div>
               <div className="flex justify-between py-1.5 pt-2 font-semibold text-green-700 dark:text-green-400"><span>Net Fazla Mesai</span><span>{fmtCurrency(brutNetResult.netYillik)}</span></div>
             </div>
@@ -865,7 +907,7 @@ export default function StandartFazlaMesaiPage() {
           <section className="rounded-xl border border-pink-200 dark:border-pink-800 p-4 sm:p-5 bg-pink-50/50 dark:bg-pink-900/10 shadow-sm">
             <h2 className="text-base font-semibold text-pink-900 dark:text-pink-300 mb-3">Hakkaniyet İndirimi / Mahsuplaşma</h2>
             <div className="divide-y divide-gray-200 dark:divide-gray-600 text-sm">
-              <div className="flex justify-between py-1.5"><span>Net Alacak</span><span className="font-medium">{fmtCurrency(netAlacak)}</span></div>
+              <div className="flex justify-between py-1.5"><span>Toplam Fazla Mesai (Brüt)</span><span className="font-medium">{fmtCurrency(totalBrut)}</span></div>
               <div className="flex justify-between py-1.5 text-red-600 dark:text-red-400"><span>1/3 Hakkaniyet İndirimi</span><span>-{fmtCurrency(hakkaniyetIndirimi)}</span></div>
               <div className="flex flex-wrap gap-2 items-end py-1.5">
                 <div>
@@ -923,7 +965,8 @@ export default function StandartFazlaMesaiPage() {
       <FooterActions
         replacePrintWith={{ label: "Yeni Hesapla", onClick: handleNew }}
         onSave={handleSave}
-        saveLabel="Kaydet"
+        saveLabel={isSaving ? (effectiveId ? "Güncelleniyor..." : "Kaydediliyor...") : (effectiveId ? "Güncelle" : "Kaydet")}
+        saveButtonProps={{ disabled: isSaving }}
         onPrint={handlePrint}
         previewButton={{
           title: PAGE_TITLE,

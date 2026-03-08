@@ -45,7 +45,7 @@ export function calculateNetFromGrossLocal(
   const gelirVergisiMatrahi = round2(brut - sgk - issizlik);
 
   // Gelir vergisi hesapla
-  const gelirVergisi = round2(calculateIncomeTaxForYear(gelirVergisiMatrahi, year));
+  const gelirVergisi = round2(calculateIncomeTaxForYear(year, gelirVergisiMatrahi));
   const gelirVergisiDilimleri = calculateIncomeTaxWithBrackets(
     year,
     gelirVergisiMatrahi

@@ -54,7 +54,7 @@ export default function Ihbar30Page() {
   const effectiveId = id || searchParams.get("caseId") || undefined;
   const pageStyle = usePageStyle();
   const { success, error: showToastError } = useToast();
-  const { kaydetAc } = useKaydetContext();
+  const { kaydetAc, isSaving } = useKaydetContext();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -530,7 +530,7 @@ export default function Ihbar30Page() {
         />
       )}
 
-      <FooterActions replacePrintWith={{ label: "Yeni Hesapla", onClick: handleNew }} onSave={handleSave} saveLabel="Kaydet" onPrint={handlePrint} previewButton={{
+      <FooterActions replacePrintWith={{ label: "Yeni Hesapla", onClick: handleNew }} onSave={handleSave} saveLabel={isSaving ? (effectiveId ? "Güncelleniyor..." : "Kaydediliyor...") : (effectiveId ? "Güncelle" : "Kaydet")} saveButtonProps={{ disabled: isSaving }} onPrint={handlePrint} previewButton={{
         title: PAGE_TITLE, copyTargetId: "ihbar-word-copy", hideWordDownload: true,
         renderContent: () => (
           <div>
