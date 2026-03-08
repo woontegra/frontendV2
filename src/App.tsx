@@ -5,6 +5,7 @@ import DavaciUcretiPage from "@/pages/davaci-ucreti/DavaciUcretiPage";
 import Kidem30Page from "@/pages/kidem-tazminati/Kidem30Page";
 import Ihbar30Page from "@/pages/ihbar-tazminati/Ihbar30Page";
 import StandartFazlaMesaiPage from "@/pages/fazla-mesai/standart/StandartFazlaMesaiPage";
+import TanikliStandartPage from "@/pages/fazla-mesai/tanikli-standart/TanikliStandartPage";
 
 function App() {
   return (
@@ -20,6 +21,8 @@ function App() {
         <Route path="ihbar-tazminati/30isci/:id" element={<Ihbar30Page />} />
         <Route path="fazla-mesai/standart" element={<StandartFazlaMesaiPage />} />
         <Route path="fazla-mesai/standart/:id" element={<StandartFazlaMesaiPage />} />
+        <Route path="fazla-mesai/tanikli-standart" element={<TanikliStandartPage />} />
+        <Route path="fazla-mesai/tanikli-standart/:id" element={<TanikliStandartPage />} />
       </Route>
     </Routes>
   );

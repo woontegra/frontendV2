@@ -34,6 +34,7 @@ function getPageTitle(pathname: string): string {
   if (pathname.startsWith("/kidem-tazminati")) return "Kıdem Tazminatı";
   if (pathname.startsWith("/ihbar-tazminati")) return "İhbar Tazminatı";
   if (pathname === "/fazla-mesai/standart" || pathname.startsWith("/fazla-mesai/standart/")) return "Standart Fazla Mesai Hesaplama";
+  if (pathname === "/fazla-mesai/tanikli-standart" || pathname.startsWith("/fazla-mesai/tanikli-standart/")) return "Tanıklı Standart Fazla Mesai Hesaplama";
   if (pathname.startsWith("/fazla-mesai")) return "Fazla Mesai Hesaplama";
   return "";
 }
