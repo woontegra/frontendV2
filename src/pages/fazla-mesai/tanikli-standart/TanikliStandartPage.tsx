@@ -10,13 +10,14 @@ import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { usePageStyle } from "@/hooks/usePageStyle";
 import { getVideoLink } from "@/config/videoLinks";
-import { calcWorkPeriodBilirKisi } from "@/utils/dateUtils";
+import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
 import {
   segmentOvertimeResult,
   computeDisplayRows,
   calculateOvertimeWith270AndLimitation,
   getAsgariUcretByDate,
   calculateWeeksBetweenDates,
+  clampToLastDayOfMonth,
   generateDynamicIntervalsFromWitnesses,
   calculateOvertimeHours,
   buildWordTable,
@@ -37,7 +38,8 @@ import { useTanikliStandartState } from "./state";
 import { fmt, fmtCurrency } from "../standart/calculations";
 import { FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI, WEEKLY_WORK_LIMIT, STANDARD_DAILY_REFERENCE_HOURS } from "../standart/constants";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
-import { calculateIncomeTaxWithBrackets } from "@modules/fazla-mesai/shared";
+/** Brütten nete çeviride eski sayfa ile aynı sonuç: sadece birinci dilim (%15) uygulanır */
+const GELIR_VERGISI_BIRINCI_DILIM_ORANI = 0.15;
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 
 const PAGE_TITLE = "Tanıklı Standart Fazla Mesai Hesaplama";
@@ -490,17 +492,17 @@ export default function TanikliStandartPage() {
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
     const sskPrim = totalBrut * 0.15;
     const matrah = Math.max(0, totalBrut - sskPrim);
-    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
-    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
+    // Eski sayfa ile aynı: tablo toplamı brütten nete çeviride sadece %15 dilim uygulanır (kademeli değil)
+    const gelirVergisi = Math.round(matrah * GELIR_VERGISI_BIRINCI_DILIM_ORANI * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
     return {
       gelirVergisi,
       damgaVergisi,
       netYillik,
-      gelirVergisiDilimleri: gvResult.brackets || "",
+      gelirVergisiDilimleri: "(%15)",
     };
-  }, [totalBrut, exitYear]);
+  }, [totalBrut]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -530,20 +532,18 @@ export default function TanikliStandartPage() {
 
   const addRow = useCallback(
     (afterRowId?: string) => {
-      const startISO = istenCikis || new Date().toISOString().slice(0, 10);
-      const brut = getAsgariUcretByDate(startISO) || 0;
       setManualRows((prev) => [
         ...prev,
         {
           id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          startISO,
-          endISO: startISO,
-          rangeLabel: `${formatDateTR(startISO)} – ${formatDateTR(startISO)}`,
+          startISO: "",
+          endISO: "",
+          rangeLabel: "",
           weeks: 0,
           originalWeekCount: 0,
-          brut,
+          brut: 0,
           katsayi: katSayi ?? 1,
-          fmHours: weeklyFMSaatFallback,
+          fmHours: 0,
           fm: 0,
           net: 0,
           isManual: true,
@@ -551,7 +551,7 @@ export default function TanikliStandartPage() {
         } as FazlaMesaiRowBase,
       ]);
     },
-    [istenCikis, katSayi, weeklyFMSaatFallback]
+    [katSayi]
   );
 
   const removeRow = useCallback((rowId: string) => {
@@ -636,7 +636,7 @@ export default function TanikliStandartPage() {
       : 0;
     const n1 = adaptToWordTable({
       headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi", "Haftalık FM Saat (Ort.)"],
-      rows: [[iseGiris || "-", istenCikis || "-", diff.label, avgFm.toFixed(2)]],
+      rows: [[isoToTR(iseGiris), isoToTR(istenCikis), diff.label, avgFm.toFixed(2)]],
     });
     s.push({
       id: "ust",
@@ -1158,18 +1158,20 @@ export default function TanikliStandartPage() {
                               <input
                                 type="date"
                                 value={r.startISO ?? ""}
-                                onChange={(e) =>
-                                  handleRowOverride(r.id, { startISO: e.target.value || undefined })
-                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  handleRowOverride(r.id, { startISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                                }}
                                 className={`${tableInputCls} flex-1 min-w-0 text-left`}
                               />
                               <span className="text-gray-400 shrink-0">–</span>
                               <input
                                 type="date"
                                 value={r.endISO ?? ""}
-                                onChange={(e) =>
-                                  handleRowOverride(r.id, { endISO: e.target.value || undefined })
-                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  handleRowOverride(r.id, { endISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                                }}
                                 className={`${tableInputCls} flex-1 min-w-0 text-left`}
                               />
                             </div>
@@ -1251,6 +1253,7 @@ export default function TanikliStandartPage() {
                                   onClick={() => removeRow(r.id)}
                                   disabled={computedDisplayRows.length <= 1}
                                   className="w-6 h-6 rounded flex items-center justify-center text-red-600 hover:bg-red-50 disabled:opacity-40 font-medium"
+                                  title={computedDisplayRows.length <= 1 ? "En az 1 satır kalmalı" : "Satırı sil"}
                                 >
                                   −
                                 </button>

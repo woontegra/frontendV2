@@ -7,6 +7,38 @@ import { calcWorkPeriodBilirKisi } from "@/pages/kidem-tazminati/utils";
 export { getAsgariUcretByDate } from "@/pages/davaci-ucreti/utils";
 export { calcWorkPeriodBilirKisi };
 
+/**
+ * İhbar tazminatı için çalışma süresi hesabı — kıdem'deki +1 (inclusive) günü OLMADAN.
+ * İhbar süresinde işten çıkış günü dahil edilmez; standart tarih farkı kullanılır.
+ */
+export function calcWorkPeriodIhbar(
+  startDate: string,
+  endDate: string
+): { years: number; months: number; days: number; label: string } {
+  if (!startDate || !endDate) return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
+    if (end < start) return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
+    let years = end.getFullYear() - start.getFullYear();
+    let months = end.getMonth() - start.getMonth();
+    let days = end.getDate() - start.getDate();
+    if (days < 0) {
+      months--;
+      const lastDayOfPrevMonth = new Date(end.getFullYear(), end.getMonth(), 0);
+      days += lastDayOfPrevMonth.getDate();
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+    return { years, months, days, label: `${years} Yıl ${months} Ay ${days} Gün` };
+  } catch {
+    return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
+  }
+}
+
 export function parseMoney(value: string | number): number {
   if (typeof value === "number") {
     if (Number.isNaN(value) || !Number.isFinite(value)) return 0;

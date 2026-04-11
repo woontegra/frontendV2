@@ -35,6 +35,7 @@ import {
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { adaptToWordTable } from "@/utils/wordTableAdapter";
 import { buildWordTable } from "@/utils/wordTableBuilder";
+import { isoToTR } from "@/utils/dateUtils";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { copySectionForWord } from "@/utils/copyTableForWord";
 
@@ -315,7 +316,7 @@ export default function Ihbar30Page() {
 
   const wordTableSections = useMemo(() => {
     const s: Array<{ id: string; title: string; html: string; htmlForPdf: string }> = [];
-    const n1 = adaptToWordTable({ headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi"], rows: [[iseGiris || "-", istenCikis || "-", diff.label]] });
+    const n1 = adaptToWordTable({ headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi"], rows: [[isoToTR(iseGiris), isoToTR(istenCikis), diff.label]] });
     s.push({ id: "ust", title: "Tarih Bilgileri", html: buildWordTable(n1.headers, n1.rows), htmlForPdf: buildStyledReportTable(n1.headers, n1.rows) });
     const bilesen: { label: string; value: string }[] = [
       { label: "Çıplak Brüt", value: fmtCurrency(parseNum(formValues.brutUcret || formValues.brut)) },
@@ -475,8 +476,18 @@ export default function Ihbar30Page() {
               </div>
               <section>
                 <h2 className={sectionTitleCls}>Notlar</h2>
-                <div className="rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Bildirim süresine uymayan taraf, bildirim süresine ilişkin ücret tutarında tazminat öder. İhbar süresi çalışma süresine göre belirlenir (İş Kanunu md. 17).</p>
+                <div className="rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-3 text-[11px] font-light text-gray-500 dark:text-gray-400 leading-relaxed space-y-1.5">
+                  <p className="font-semibold text-gray-800 dark:text-gray-200">Süreli fesih</p>
+                  <p>Madde 17 - Belirsiz süreli iş sözleşmelerinin feshinden önce durumun diğer tarafa bildirilmesi gerekir.</p>
+                  <p className="font-semibold text-gray-800 dark:text-gray-200">İş sözleşmeleri;</p>
+                  <p className="pl-4">a) İşi altı aydan az sürmüş olan işçi için, bildirimin diğer tarafa yapılmasından başlayarak iki hafta sonra,</p>
+                  <p className="pl-4">b) İşi altı aydan birbuçuk yıla kadar sürmüş olan işçi için, bildirimin diğer tarafa yapılmasından başlayarak dört hafta sonra,</p>
+                  <p className="pl-4">c) İşi birbuçuk yıldan üç yıla kadar sürmüş işçi için, bildirimin diğer tarafa yapılmasından başlayarak altı hafta sonra,</p>
+                  <p className="pl-4">d) İşi üç yıldan fazla sürmüş işçi için, bildirim yapılmasından başlayarak sekiz hafta sonra,</p>
+                  <p>feshedilmiş sayılır.</p>
+                  <p>Bu süreler asgari olup sözleşmeler ile artırılabilir.</p>
+                  <p>Bildirim şartına uymayan taraf, bildirim süresine ilişkin ücret tutarında tazminat ödemek zorundadır.</p>
+                  <p>İşveren bildirim süresine ait ücreti peşin vermek suretiyle iş sözleşmesini feshedebilir.</p>
                 </div>
               </section>
             </div>
@@ -541,10 +552,9 @@ export default function Ihbar30Page() {
               .report-section-copy .copy-icon-btn { background: transparent; border: none; cursor: pointer; padding: 0.25rem; border-radius: 0.375rem; color: #6b7280; }
               .report-section-copy .copy-icon-btn:hover { background: #f3f4f6; color: #374151; }
               #ihbar-word-copy .section-content { border: none; overflow-x: auto; padding: 0; margin: 0; -webkit-overflow-scrolling: touch; }
-              #ihbar-word-copy table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; font-size: 0.75rem; color: #111827; }
-              #ihbar-word-copy td, #ihbar-word-copy th { border: 1px solid #999; padding: 5px 8px; background: #fff !important; color: #111827 !important; }
-              #ihbar-word-copy td:first-child, #ihbar-word-copy th:first-child { width: 62%; min-width: 0; }
-              #ihbar-word-copy td:last-child, #ihbar-word-copy th:last-child { width: 38%; text-align: right; white-space: nowrap; }
+              #ihbar-word-copy table { border-collapse: collapse; width: 100%; margin: 0; font-size: 0.75rem; color: #111827; }
+              #ihbar-word-copy td, #ihbar-word-copy th { border: 1px solid #999; padding: 5px 8px; background: #fff !important; color: #111827 !important; white-space: nowrap; }
+              #ihbar-word-copy td:last-child, #ihbar-word-copy th:last-child { text-align: right; width: 38%; }
             `}</style>
             <div id="ihbar-word-copy">
               {wordTableSections.map((sec) => (

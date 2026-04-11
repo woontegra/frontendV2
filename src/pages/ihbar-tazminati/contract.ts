@@ -50,3 +50,33 @@ export interface TotalsData {
   ay: number;
   gun: number;
 }
+
+/** Borçlar Kanunu ihbar — API istek/yanıt */
+export interface CalculateIhbarBorclarRequest {
+  brut: string;
+  prim: string;
+  ikramiye: string;
+  yol: string;
+  yemek: string;
+  diger: string;
+  extras: ExtraItem[];
+  totals: TotalsData;
+  /** Basın İş: mesleğe başlangıç → işten çıkış kıdem süresi (yıl/ay/gün) */
+  kidemTotals?: Pick<TotalsData, "yil" | "ay" | "gun">;
+  exitYear: number;
+}
+
+export interface CalculateIhbarBorclarResponse {
+  success: boolean;
+  data?: {
+    weeks: number;
+    /** Basın İş kıdeme göre ihbar günü (30 veya 90) */
+    ihbarGun?: number;
+    brut: number;
+    gelirVergisi: number;
+    gelirVergisiDilimleri: string;
+    damgaVergisi: number;
+    net: number;
+  };
+  error?: string;
+}

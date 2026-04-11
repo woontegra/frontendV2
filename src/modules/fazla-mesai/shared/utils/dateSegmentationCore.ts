@@ -1,8 +1,7 @@
 /**
  * Date segmentation core - Tarih aralıklarını asgari ücret dönemlerine göre böler
+ * Tüm tarih işlemleri UTC ile yapılır (timezone kaynaklı 1 gün sapmasını önler)
  */
-
-import { normalizeLocalDate } from "./dateHelpers";
 
 // Asgari ücret dönemleri
 const ASGARI_UCRET_DONEMLERI: Record<number, Array<{ start: string; end: string }>> = {
@@ -60,10 +59,24 @@ const ASGARI_UCRET_DONEMLERI: Record<number, Array<{ start: string; end: string 
   2026: [{ start: "01.01.2026", end: "31.12.2026" }]
 };
 
-const toISODateLocal = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
+/** DD.MM.YYYY veya YYYY-MM-DD stringini UTC gece yarısı olarak Date'e çevirir */
+function parseDateAsUTC(dateStr: string): Date {
+  if (!dateStr) return new Date(NaN);
+  const parts = dateStr.split(/[.\-\/]/).map(Number);
+  let day: number, month: number, year: number;
+  if (parts[0] > 1900) {
+    [year, month, day] = parts as [number, number, number];
+  } else {
+    [day, month, year] = parts as [number, number, number];
+  }
+  return new Date(Date.UTC(year, (month ?? 1) - 1, day ?? 1));
+}
+
+/** Tarihi YYYY-MM-DD olarak döndürür (UTC ile timezone kayması önlenir) */
+const toISODateUTC = (d: Date): string => {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 };
 
@@ -72,15 +85,15 @@ const toISODateLocal = (d: Date): string => {
  */
 export function splitByAsgariUcretPeriods(startDate: Date, endDate: Date): Array<{ start: Date; end: Date }> {
   const result: Array<{ start: Date; end: Date }> = [];
-  const startYear = startDate.getFullYear();
-  const endYear = endDate.getFullYear();
+  const startYear = startDate.getUTCFullYear();
+  const endYear = endDate.getUTCFullYear();
 
   for (let year = startYear; year <= endYear; year++) {
     const yearPeriods = ASGARI_UCRET_DONEMLERI[year];
 
     if (!yearPeriods || yearPeriods.length === 0) {
-      const yearStart = new Date(year, 0, 1);
-      const yearEnd = new Date(year, 11, 31);
+      const yearStart = new Date(Date.UTC(year, 0, 1));
+      const yearEnd = new Date(Date.UTC(year, 11, 31));
       const segStart = year === startYear ? startDate : yearStart;
       const segEnd = year === endYear ? endDate : yearEnd;
       if (segStart <= segEnd) {
@@ -90,10 +103,10 @@ export function splitByAsgariUcretPeriods(startDate: Date, endDate: Date): Array
     }
 
     for (const period of yearPeriods) {
-      const pStart = normalizeLocalDate(period.start);
-      const pEnd = normalizeLocalDate(period.end);
+      const pStart = parseDateAsUTC(period.start);
+      const pEnd = parseDateAsUTC(period.end);
 
-      if (!pStart || !pEnd) continue;
+      if (isNaN(pStart.getTime()) || isNaN(pEnd.getTime())) continue;
 
       const segStart = pStart > startDate ? pStart : startDate;
       const segEnd = pEnd < endDate ? pEnd : endDate;
@@ -117,25 +130,46 @@ function isValidISODate(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 }
 
+/** DD.MM.YYYY veya YYYY-MM-DD → YYYY-MM-DD */
+function toYYYYMMDD(s: string): string | null {
+  if (!s || typeof s !== "string") return null;
+  const trimmed = s.trim();
+  if (isValidISODate(trimmed)) return trimmed;
+  const ddmmyy = trimmed.match(/^(\d{1,2})[.\-\/](\d{1,2})[.\-\/](\d{4})$/);
+  if (ddmmyy) {
+    const [, d, m, y] = ddmmyy;
+    return `${y}-${m!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+  }
+  return null;
+}
+
+/** YYYY-MM-DD stringini UTC gece yarısı olarak Date'e çevirir (timezone kaymasını önler) */
+function parseISODateUTC(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1));
+}
+
 /**
  * overtimeResults'tan segmentleri oluşturur (yıl ve asgari ücret dönemlerine göre böler)
  */
 export function segmentOvertimeResult(result: any): Array<{ start: string; end: string }> {
-  const startISO = result.start || result.startDate || '';
-  const endISO = result.end || result.endDate || '';
+  const startRaw = result.start || result.startDate || '';
+  const endRaw = result.end || result.endDate || '';
+  const startISO = toYYYYMMDD(startRaw) || (isValidISODate(startRaw) ? startRaw : null);
+  const endISO = toYYYYMMDD(endRaw) || (isValidISODate(endRaw) ? endRaw : null);
 
-  if (!startISO || !endISO || !isValidISODate(startISO) || !isValidISODate(endISO)) {
+  if (!startISO || !endISO) {
     return [];
   }
 
-  const startDate = new Date(startISO);
-  const endDate = new Date(endISO);
+  const startDate = parseISODateUTC(startISO);
+  const endDate = parseISODateUTC(endISO);
 
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
     return [];
   }
-  const startYear = startDate.getFullYear();
-  const endYear = endDate.getFullYear();
+  const startYear = startDate.getUTCFullYear();
+  const endYear = endDate.getUTCFullYear();
   if (startYear < REASONABLE_YEAR_MIN || endYear > REASONABLE_YEAR_MAX || startYear > endYear) {
     return [];
   }
@@ -146,7 +180,7 @@ export function segmentOvertimeResult(result: any): Array<{ start: string; end: 
   const segments = splitByAsgariUcretPeriods(startDate, endDate);
 
   return segments.map(seg => ({
-    start: toISODateLocal(seg.start),
-    end: toISODateLocal(seg.end)
+    start: toISODateUTC(seg.start),
+    end: toISODateUTC(seg.end)
   }));
 }

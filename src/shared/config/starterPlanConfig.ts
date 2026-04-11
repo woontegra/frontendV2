@@ -64,9 +64,12 @@ export const STARTER_ALLOWED_MODULES: StarterAllowedModule[] = [
 export const STARTER_ALLOWED_PATHS = [
   '/kidem-tazminati/30isci',
   '/ihbar-tazminati/30isci',
+  '/fazla-mesai',
   '/fazla-mesai/standart',
   '/yillik-izin/standart',
+  '/ubgt',
   '/ubgt-alacagi',
+  '/ubgt-bilirkisi',
   '/hafta-tatili-alacagi/standard',
 ];
 

@@ -4,6 +4,11 @@
  * 270 saat düşümü (manuel satırlar sıfırlanmaz) ve yıllık izin dışlaması tek yerde.
  */
 
+/** Debug: runtime kontrol (modül yüklendiğinde flag henüz set edilmemiş olabilir) */
+function isDebugPipeline(): boolean {
+  return typeof window !== "undefined" && !!(window as any).__FM_DEBUG_PIPELINE__;
+}
+
 import { applyAnnualLeaveExclusions } from "./applyAnnualLeaveExclusions";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
 import { calculateWeeksBetweenDates } from "@/utils/dateUtils";
@@ -69,6 +74,8 @@ export interface ComputeDisplayRowsInput<T extends FazlaMesaiRowBase> {
   zamanasimiBaslangic?: string | null;
   /** 270 "Şirket" detaylı hesap için; verilmezse detailed modda apply270RuleFrontend kullanılır */
   calculateOvertime270Detailed?: CalculateOvertime270Detailed;
+  /** true: Ham takvim haftaları göster (270 düşümü hafta sütununa uygulanmaz). Haftalık Karma için kullanılır. */
+  useRawWeeks?: boolean;
 }
 
 /**
@@ -151,20 +158,33 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     istenCikis,
     zamanasimiBaslangic,
     calculateOvertime270Detailed,
+    useRawWeeks,
   } = input;
 
   const kats = katSayi || 1;
 
+  if (isDebugPipeline()) {
+    const inputZeros = rows.filter((r) => (r.weeks ?? 0) <= 0);
+    if (inputZeros.length) console.log("[computeDisplayRows] GİRİŞ: Hafta<=0 olan rows:", inputZeros.map((r) => ({ id: r.id, startISO: r.startISO, endISO: r.endISO, weeks: r.weeks })));
+  }
   const automaticWithOverrides = rows
     .filter((row) => !(rowOverrides[row.id] as { hidden?: boolean })?.hidden)
     .map((row) => {
       const override = rowOverrides[row.id];
-      if (!override) return row;
+      if (!override) {
+        if (isDebugPipeline() && (row.weeks ?? 0) <= 0) console.log("[computeDisplayRows] auto NO override, row as-is:", row.id, { weeks: row.weeks });
+        return row;
+      }
       const merged = { ...row, ...override } as T;
       const startISO = (merged as FazlaMesaiRowBase).startISO ?? row.startISO;
       const endISO = (merged as FazlaMesaiRowBase).endISO ?? row.endISO;
       const weeksFromDates = startISO && endISO ? calculateWeeksBetweenDates(startISO, endISO) : undefined;
-      const effectiveWeeks = override.weeks ?? weeksFromDates ?? row.weeks;
+      // override.weeks 0 geldiyse (kaydedilmiş hatalı veri) tarihten hesaplananı kullan; 0 ?? 11 = 0 olduğu için
+      let effectiveWeeks = override.weeks ?? weeksFromDates ?? row.weeks;
+      if (effectiveWeeks <= 0 && (weeksFromDates ?? row.weeks ?? 0) > 0) effectiveWeeks = weeksFromDates ?? row.weeks ?? effectiveWeeks;
+      if (isDebugPipeline() && (effectiveWeeks <= 0 || row.id.includes("2023"))) {
+        console.log("[computeDisplayRows] auto override row:", row.id, { startISO, endISO, "override.weeks": override.weeks, weeksFromDates, "row.weeks": row.weeks, effectiveWeeks });
+      }
       if (
         override.weeks !== undefined ||
         override.startISO !== undefined ||
@@ -197,7 +217,8 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     const startISO = merged.startISO ?? row.startISO;
     const endISO = merged.endISO ?? row.endISO;
     const weeksFromDates = startISO && endISO ? calculateWeeksBetweenDates(startISO, endISO) : undefined;
-    const weeks = merged.weeks ?? weeksFromDates ?? 0;
+    let weeks = merged.weeks ?? weeksFromDates ?? 0;
+    if (weeks <= 0 && (weeksFromDates ?? row.weeks ?? 0) > 0) weeks = weeksFromDates ?? row.weeks ?? weeks;
     const brut = merged.brut ?? 0;
     const fmHours = merged.fmHours ?? weeklyFMSaat;
     const hoursEffective = weeks * fmHours;
@@ -233,7 +254,26 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     originalWeekCount: r.originalWeekCount ?? r.weeks,
   })) as T[];
 
-  if (mode270 !== "none") {
+  if (useRawWeeks) {
+    // Ham takvim haftaları Hafta sütununda gösterilir - Haftalık Karma için
+    const getRawWeeks = (r: T) => {
+      const fromDates = r.startISO && r.endISO ? calculateWeeksBetweenDates(r.startISO, r.endISO) : undefined;
+      return fromDates ?? r.originalWeekCount ?? r.weeks ?? 0;
+    };
+    const withRaw = with270.map((r) => ({
+      ...r,
+      originalWeekCount: getRawWeeks(r),
+      weeks: getRawWeeks(r),
+    })) as T[];
+
+    if (mode270 === "simple") {
+      with270 = withRaw.map((r) => ({ ...r, fmHours: Math.max(0, (r.fmHours ?? 0) - 5.2) })) as T[];
+    } else if (mode270 === "detailed") {
+      with270 = apply270RuleFrontend(withRaw) as T[];
+    } else {
+      with270 = withRaw;
+    }
+  } else if (mode270 !== "none") {
     if (mode270 === "simple") {
       const YARGITAY_270 = 5.2;
       with270 = with270.map((r) => ({
@@ -267,12 +307,13 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
             const rawWeeks = r.originalWeekCount ?? r.weeks ?? 0;
             const adjusted = sonuclar[j].fmHafta;
             const isManual = !!(r.manual ?? r.isManual);
+            // adjusted 0 olduğunda ?? rawWeeks kullanılmaz (0 !== null/undefined). Bu yüzden 0 gösterme hatası oluyordu.
             const weeks = Number.isFinite(adjusted)
-              ? (isManual && adjusted <= 0 ? Math.max(1, rawWeeks) : (adjusted ?? rawWeeks))
+              ? (isManual && adjusted <= 0 ? Math.max(1, rawWeeks) : (adjusted > 0 ? adjusted : rawWeeks))
               : rawWeeks;
             return {
               ...r,
-              weeks: weeks || rawWeeks,
+              weeks: weeks > 0 ? weeks : rawWeeks,
               originalWeekCount: r.originalWeekCount ?? r.weeks,
             } as T;
           }
@@ -285,6 +326,14 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
   }
 
   const afterExclusions = applyAnnualLeaveExclusions(with270, exclusions, { minWeeks: 1 });
+  if (isDebugPipeline()) {
+    const zeros = afterExclusions.filter((r) => (r.weeks ?? 0) <= 0);
+    if (zeros.length) console.log("[computeDisplayRows] SONUÇ: Hafta=0 olan satırlar:", zeros.map((r) => ({ id: r.id, startISO: r.startISO, endISO: r.endISO, weeks: r.weeks })));
+    const overrideIds = Object.keys(rowOverrides);
+    const override2023 = overrideIds.filter((k) => k.includes("2023")).map((k) => ({ id: k, ...rowOverrides[k] }));
+    if (override2023.length) console.log("[computeDisplayRows] rowOverrides (2023 satırları):", override2023);
+    console.log("[computeDisplayRows] mode270:", mode270, "rowOverrides toplam:", overrideIds.length);
+  }
   return afterExclusions.map((row) => {
     const { fm, net } = calcFmNet(row as FazlaMesaiRowBase, kats);
     return { ...row, fm, net } as T;

@@ -11,10 +11,10 @@ export default function NoteCard() {
           <h3 className="font-semibold text-slate-800 dark:text-slate-200">Notlar</h3>
         </div>
       </div>
-      <div className="p-4 text-sm leading-relaxed space-y-4 notes-content">
+      <div className="p-4 text-[11px] font-light leading-relaxed space-y-4 notes-content">
         <div>
           <div className="font-semibold mb-2 text-slate-800 dark:text-slate-200">NOT: Çıplak Brüt Ücret işçinin işi yapmak için aldığı eklentisiz maaşından ibarettir.</div>
-          <p className="text-slate-600 dark:text-slate-300">
+          <p className="text-slate-500 dark:text-slate-400">
             Prim, İkramiye gibi ücretlerin hesaplamasında son 12 aylık bordroda yer alan tüm kalemler toplanır.
             Toplam 360'a bölünür, 30 ile çarpılır, çıkan bedeli hesaplama kutucuğuna yazınız.
           </p>

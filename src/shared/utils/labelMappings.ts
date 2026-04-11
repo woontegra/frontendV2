@@ -86,6 +86,7 @@ export const MODULE_TYPE_LABELS: Record<string, string> = {
   fazla_mesai_vardiya: "Vardiya Fazla Mesai",
   ubgt: "UBGT Alacağı",
   ubgt_alacagi: "UBGT Alacağı",
+  ubgt_bilirkisi: "Bilirkişi UBGT Alacağı",
   hafta_tatili: "Hafta Tatili Alacağı",
   hafta_tatili_standart: "Hafta Tatili Alacağı",
   hafta_tatili_alacagi_standart: "Hafta Tatili Alacağı",

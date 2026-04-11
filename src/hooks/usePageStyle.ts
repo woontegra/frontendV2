@@ -15,6 +15,7 @@ import {
   FaExclamationTriangle,
   FaUserCheck,
   FaHourglassHalf,
+  FaSearch,
 } from "react-icons/fa";
 
 export type PageKey =
@@ -32,7 +33,8 @@ export type PageKey =
   | "bosta-gecen-sure"
   | "ise-almama"
   | "ucret"
-  | "ise-iade";
+  | "ise-iade"
+  | "is-arama-izni";
 
 export interface PageStyle {
   color: string;
@@ -116,6 +118,11 @@ const PAGE_STYLES: Record<PageKey, PageStyle> = {
     icon: FaWallet,
     pageKey: "ucret",
   },
+  "is-arama-izni": {
+    color: "#1E88E5",
+    icon: FaSearch,
+    pageKey: "is-arama-izni",
+  },
 };
 
 /**
@@ -154,6 +161,9 @@ export function usePageStyle(pageKey?: PageKey): PageStyle {
     if (path.includes("/bakiye-ucret") || path.includes("/bakiye-ucret-alacagi")) {
       return PAGE_STYLES["bakiye-ucret"];
     }
+    if (path.includes("/ucret-alacagi")) {
+      return PAGE_STYLES["ucret"];
+    }
     if (path.includes("/prim-alacagi") || path.includes("/prim")) {
       return PAGE_STYLES["prim"];
     }
@@ -172,8 +182,11 @@ export function usePageStyle(pageKey?: PageKey): PageStyle {
     if (path.includes("/ise-almama")) {
       return PAGE_STYLES["ise-almama"];
     }
-    if (path.includes("/ucret-alacagi") || path.includes("/ucret")) {
+    if (path.includes("/ucret")) {
       return PAGE_STYLES["ucret"];
+    }
+    if (path.includes("/is-arama-izni")) {
+      return PAGE_STYLES["is-arama-izni"];
     }
 
     // Varsayılan

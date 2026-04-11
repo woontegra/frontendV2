@@ -7,7 +7,7 @@ function Section({ icon, children }: { icon: string; children: React.ReactNode }
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-sm">
         {icon}
       </div>
-      <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{children}</div>
+      <div className="text-[11px] font-light text-gray-600 dark:text-gray-400 leading-relaxed">{children}</div>
     </div>
   );
 }

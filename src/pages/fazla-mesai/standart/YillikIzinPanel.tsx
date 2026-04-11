@@ -2,6 +2,7 @@
  * Yıllık izin / Çalışılmayan raporlu günler - mobil uyumlu özel panel
  */
 import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { createPortal } from "react-dom";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
 import {
@@ -14,7 +15,7 @@ const EXCLUSION_TYPES = ["Yıllık İzin", "Rapor", "Diğer", "UBGT"] as const;
 type ExclusionType = (typeof EXCLUSION_TYPES)[number];
 
 const inputCls = "w-full px-3 py-2 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500";
-const btnCls = "px-3 py-2 text-sm font-medium rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors";
+const btnCls = "px-3 py-2 text-sm font-normal rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors";
 
 function normalizeLoadedExclusions(raw: unknown): ExcludedDay[] {
   const arr = Array.isArray(raw) ? raw : [];
@@ -93,7 +94,7 @@ export function YillikIzinPanel({ exclusions, setExclusions, success = () => {},
       <button
         type="button"
         onClick={() => setIsOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-normal text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
       >
         <span>Yıllık izin / Çalışılmayan raporlu günler dışlanabilir.</span>
         <span className="text-gray-500" aria-hidden>{isOpen ? "▼" : "▶"}</span>
@@ -105,20 +106,21 @@ export function YillikIzinPanel({ exclusions, setExclusions, success = () => {},
             Dışlama ekleyin; düşüm, girdiğiniz gün sayısına göre yapılır.
           </p>
 
-          {/* Butonlar - mobilde flex-wrap ile */}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => { setSaveName(""); setShowSaveModal(true); }} disabled={exclusions.length === 0} className={btnCls}>
+          {/* Butonlar - mobilde yan yana */}
+          <div className="flex flex-nowrap gap-1.5 sm:gap-2">
+            <button type="button" onClick={() => { setSaveName(""); setShowSaveModal(true); }} disabled={exclusions.length === 0} className={`flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-normal rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50`}>
               Kaydet
             </button>
             <button
               type="button"
               onClick={async () => { const s = await getAllExclusionSets(); setSavedSets(s); setShowLoadModal(true); }}
-              className={btnCls}
+              className="flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-normal rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
             >
               İçe Aktar
             </button>
-            <button type="button" onClick={handleClearAll} disabled={exclusions.length === 0} className={`${btnCls} text-red-600 dark:text-red-400`}>
-              Tümünü Sil
+            <button type="button" onClick={handleClearAll} disabled={exclusions.length === 0} className={`flex-1 min-w-0 px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-normal rounded border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-red-600 dark:text-red-400 flex items-center justify-center gap-1 disabled:opacity-50`}>
+              <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="truncate">Tümünü Sil</span>
             </button>
           </div>
 
@@ -178,7 +180,7 @@ export function YillikIzinPanel({ exclusions, setExclusions, success = () => {},
                     onChange={(e) => setExclusions((arr) => arr.map((r, i) => (i === idx ? { ...r, days: Number(e.target.value) || 0 } : r)))}
                     className={`col-span-2 ${inputCls} py-1.5 text-xs`}
                   />
-                  <button type="button" onClick={() => setExclusions((arr) => arr.filter((_, i) => i !== idx))} className="col-span-1 text-red-600 text-sm">Sil</button>
+                  <button type="button" onClick={() => setExclusions((arr) => arr.filter((_, i) => i !== idx))} className="col-span-1 p-2 flex items-center justify-center text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded" title="Sil"><Trash2 className="w-4 h-4" /></button>
                 </div>
               ))}
             </div>
@@ -230,7 +232,7 @@ export function YillikIzinPanel({ exclusions, setExclusions, success = () => {},
                       <span className="font-medium text-sm">{s.name} ({s.data.length} kayıt)</span>
                       <div className="flex gap-2">
                         <button type="button" onClick={() => { setExclusions(normalizeLoadedExclusions(s.data)); success(`"${s.name}" yüklendi.`); setShowLoadModal(false); }} className={btnCls}>Yükle</button>
-                        <button type="button" onClick={async () => { if (confirm(`"${s.name}" silinsin mi?`)) { await deleteExclusionSet(s.id); setSavedSets(await getAllExclusionSets()); success("Silindi."); } }} className={`${btnCls} text-red-600`}>Sil</button>
+                        <button type="button" onClick={async () => { if (confirm(`"${s.name}" silinsin mi?`)) { await deleteExclusionSet(s.id); setSavedSets(await getAllExclusionSets()); success("Silindi."); } }} className={`${btnCls} text-red-600 flex items-center gap-1`} title="Sil"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
                   ))}

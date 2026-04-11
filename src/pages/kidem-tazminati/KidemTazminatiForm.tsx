@@ -16,6 +16,15 @@ import {
 import { Save, Download, Trash2 } from "lucide-react";
 import type { ExtraItem } from "./contract";
 
+/** Kidem30 / İhbar sayfalarıyla aynı input puntosu ve kompakt padding */
+const labelClsForm =
+  "block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5";
+const inputClsForm =
+  "px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-transparent";
+const inputReadonlyClsForm =
+  "px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-400";
+const inputFixedLabelClsForm = `${inputReadonlyClsForm} w-24 sm:w-28 shrink-0`;
+
 // Asgari ücret tablosu (2005 - 2025)
 const ASGARI_UCRET_BRUT: Record<string, number> = {
   "2005-1": 488.7, "2005-2": 488.7,
@@ -74,6 +83,7 @@ type Props = {
     ikramiye: string;
     yol: string;
     yemek: string;
+    diger?: string;
     extras: ExtraItem[];
     toplam: number;
   }) => void;
@@ -86,6 +96,7 @@ type Props = {
   initialIkramiye?: string;
   initialYol?: string;
   initialYemek?: string;
+  initialDiger?: string;
   initialExtras?: ExtraItem[];
   customTitle?: string;
   customIseGirisLabel?: string;
@@ -100,6 +111,7 @@ type Props = {
   showIkramiyeInput?: boolean;
   showYolInput?: boolean;
   showYemekInput?: boolean;
+  showDigerInput?: boolean;
   showExtras?: boolean;
   /** true ise dış kart render edilmez (üst sayfa kartına gömülü) */
   embedInCard?: boolean;
@@ -121,6 +133,7 @@ export default function KidemTazminatiForm({
   initialIkramiye, 
   initialYol, 
   initialYemek, 
+  initialDiger,
   initialExtras, 
   customTitle, 
   customIseGirisLabel, 
@@ -135,6 +148,7 @@ export default function KidemTazminatiForm({
   showIkramiyeInput = true,
   showYolInput = true,
   showYemekInput = true,
+  showDigerInput = false,
   showExtras = true,
   embedInCard = false,
 }: Props) {
@@ -150,6 +164,7 @@ export default function KidemTazminatiForm({
   const [ikramiye, setIkramiye] = useState("");
   const [yol, setYol] = useState("");
   const [yemek, setYemek] = useState("");
+  const [diger, setDiger] = useState("");
   const [extras, setExtras] = useState<ExtraItem[]>([]);
   const [asgariHata, setAsgariHata] = useState<string | null>(null);
   
@@ -161,6 +176,7 @@ export default function KidemTazminatiForm({
     initialIkramiye: "",
     initialYol: "",
     initialYemek: "",
+    initialDiger: "",
     initialExtras: [] as ExtraItem[],
   });
   
@@ -172,6 +188,7 @@ export default function KidemTazminatiForm({
     ikramiye: "",
     yol: "",
     yemek: "",
+    diger: "",
     toplam: 0,
     extras: [] as ExtraItem[],
   });
@@ -198,10 +215,16 @@ export default function KidemTazminatiForm({
   }, [adjustedIseGiris, istenCikis]);
 
   const toplam = useMemo(() => {
-    const base = parseMoney(brut) + parseMoney(prim) + parseMoney(ikramiye) + parseMoney(yol) + parseMoney(yemek);
+    const base =
+      parseMoney(brut) +
+      parseMoney(prim) +
+      parseMoney(ikramiye) +
+      parseMoney(yol) +
+      parseMoney(yemek) +
+      (showDigerInput ? parseMoney(diger) : 0);
     const ex = extras.reduce((acc, it) => acc + parseMoney(it.value), 0);
     return base + ex;
-  }, [brut, prim, ikramiye, yol, yemek, extras]);
+  }, [brut, prim, ikramiye, yol, yemek, diger, showDigerInput, extras]);
 
   useEffect(() => {
     if (appliedEklenti === undefined || appliedEklenti === null) return;
@@ -218,7 +241,9 @@ export default function KidemTazminatiForm({
 
     if (field === "prim") setPrim(formatted);
     if (field === "ikramiye") setIkramiye(formatted);
+    if (field === "yol") setYol(formatted);
     if (field === "yemek") setYemek(formatted);
+    if (field === "diger") setDiger(formatted);
 
     if (field.startsWith("extra:")) {
       const id = field.split(":")[1];
@@ -325,6 +350,12 @@ export default function KidemTazminatiForm({
       setYemek(initialYemek); 
     }
   }, [initialYemek]);
+  useEffect(() => {
+    if (initialDiger !== undefined && initialDiger !== prevInitialsRef.current.initialDiger) {
+      prevInitialsRef.current.initialDiger = initialDiger;
+      setDiger(initialDiger);
+    }
+  }, [initialDiger]);
   // initialExtras sadece harici yükleme (kayıt açma vb.) durumunda uygula.
   // Kullanıcı +Ekle ile eklemişse (bizim extras daha fazla) parent'ın geri yansıması bizi silmesin.
   useEffect(() => { 
@@ -360,6 +391,7 @@ export default function KidemTazminatiForm({
         ikramiye,
         yol,
         yemek,
+        diger,
         toplam,
         extras,
       };
@@ -377,6 +409,7 @@ export default function KidemTazminatiForm({
       prevValuesRef.current.ikramiye !== ikramiye ||
       prevValuesRef.current.yol !== yol ||
       prevValuesRef.current.yemek !== yemek ||
+      prevValuesRef.current.diger !== diger ||
       prevValuesRef.current.toplam !== toplam ||
       extrasChanged;
     
@@ -389,12 +422,24 @@ export default function KidemTazminatiForm({
         ikramiye,
         yol,
         yemek,
+        diger,
         toplam,
         extras,
       };
-      onValuesChange({ iseGiris, istenCikis, brut, prim, ikramiye, yol, yemek, extras, toplam });
+      onValuesChange({
+        iseGiris,
+        istenCikis,
+        brut,
+        prim,
+        ikramiye,
+        yol,
+        yemek,
+        ...(showDigerInput ? { diger } : {}),
+        extras,
+        toplam,
+      });
     }
-  }, [iseGiris, istenCikis, brut, prim, ikramiye, yol, yemek, toplam, extras, onValuesChange]);
+  }, [iseGiris, istenCikis, brut, prim, ikramiye, yol, yemek, diger, showDigerInput, toplam, extras, onValuesChange]);
 
   const addExtra = () => {
     const id =
@@ -418,7 +463,7 @@ export default function KidemTazminatiForm({
     }
   }, [showImportModal]);
 
-  const FIXED_EXTRA_IDS = ["prim", "ikramiye", "yol", "yemek"];
+  const FIXED_EXTRA_IDS = ["prim", "ikramiye", "yol", "yemek", "diger"];
   const handleSave = async () => {
     if (!saveName.trim()) {
       error("Lütfen bir isim girin");
@@ -430,6 +475,7 @@ export default function KidemTazminatiForm({
     if (ikramiye?.trim()) items.push({ id: "ikramiye", name: "İkramiye", value: ikramiye.trim() });
     if (yol?.trim()) items.push({ id: "yol", name: "Yol", value: yol.trim() });
     if (yemek?.trim()) items.push({ id: "yemek", name: "Yemek", value: yemek.trim() });
+    if (showDigerInput && diger?.trim()) items.push({ id: "diger", name: "Diğer", value: diger.trim() });
     extras.forEach(item => items.push({ id: item.id, name: item.label, value: item.value }));
 
     if (items.length === 0) {
@@ -454,12 +500,14 @@ export default function KidemTazminatiForm({
       const ikramiyeItem = data.find((x: { id: string }) => x.id === "ikramiye");
       const yolItem = data.find((x: { id: string }) => x.id === "yol");
       const yemekItem = data.find((x: { id: string }) => x.id === "yemek");
+      const digerItem = data.find((x: { id: string }) => x.id === "diger");
       const extrasData = data.filter((x: { id: string }) => !FIXED_EXTRA_IDS.includes(x.id));
       if (primItem?.value) setPrim(primItem.value);
       if (ikramiyeItem?.value) setIkramiye(ikramiyeItem.value);
       if (yolItem?.value) setYol(yolItem.value);
       if (yemekItem?.value) setYemek(yemekItem.value);
-      setExtras(extrasData.map((item: { id: string; name: string; value: string }) => ({ id: item.id, label: item.name, value: item.value })));
+      if (showDigerInput && digerItem?.value) setDiger(digerItem.value);
+      setExtras(extrasData.map((item: { id: string; label?: string; name?: string; value: string }) => ({ id: item.id, label: item.label ?? item.name ?? "", value: item.value })));
       success("Ekstra hesaplamalar yüklendi");
       setShowImportModal(false);
     } else {
@@ -486,7 +534,7 @@ export default function KidemTazminatiForm({
       {!embedInCard && (
       <div className="border-b border-gray-200 dark:border-gray-600 pb-2 mb-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between items-center gap-2">
-          <div className="text-base md:text-lg font-semibold text-gray-800 dark:text-gray-200 text-center sm:text-left" style={{ minWidth: 0, wordBreak: 'break-word' }}>{customTitle || "KIDEM TAZMİNATI HESAPLAMA"}</div>
+          <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 text-center sm:text-left" style={{ minWidth: 0, wordBreak: 'break-word' }}>{customTitle || "KIDEM TAZMİNATI HESAPLAMA"}</div>
           {headerAction && <div className="flex gap-2 justify-center w-full sm:w-auto" style={{ flexShrink: 0 }}>{headerAction}</div>}
         </div>
       </div>
@@ -494,7 +542,7 @@ export default function KidemTazminatiForm({
       {!hideEmploymentDates && showEmploymentDates && (
         <div className="form-row" style={{ marginBottom: '16px' }}>
           <div className="form-group">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1" style={{ minWidth: 0 }}>
+            <label className={`${labelClsForm} flex items-center gap-1`} style={{ minWidth: 0 }}>
               <span style={{ wordBreak: 'break-word' }}>{customIseGirisLabel || "İşe Giriş Tarihi"}</span>
               <span className="text-gray-500 dark:text-gray-400 text-xs" title="Tarih alanına GG.AA.YYYY formatında giriş yapınız.">ℹ️</span>
             </label>
@@ -513,11 +561,11 @@ export default function KidemTazminatiForm({
                   }
                 }
               }}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              className={`w-full ${inputClsForm}`}
             />
           </div>
           <div className="form-group">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1" style={{ minWidth: 0 }}>
+            <label className={`${labelClsForm} flex items-center gap-1`} style={{ minWidth: 0 }}>
               <span style={{ wordBreak: 'break-word' }}>{customIstenCikisLabel || "İşten Çıkış Tarihi"}</span>
               <span className="text-gray-500 dark:text-gray-400 text-xs" title="Tarih alanına GG.AA.YYYY formatında giriş yapınız.">ℹ️</span>
             </label>
@@ -541,25 +589,25 @@ export default function KidemTazminatiForm({
                   }
                 }
               }}
-              className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              className={`w-full ${inputClsForm}`}
             />
           </div>
           <div className="form-group">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" style={{ minWidth: 0 }}>
+            <label className={labelClsForm} style={{ minWidth: 0 }}>
               <span style={{ wordBreak: 'break-word' }}>Çalışma Süresi</span>
             </label>
-            <input disabled value={diff.label} className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 text-gray-700 dark:text-gray-300" />
+            <input disabled value={diff.label} className={`w-full ${inputReadonlyClsForm}`} />
           </div>
         </div>
       )}
 
       {showBrutInput && (
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1">
+          <label className={`${labelClsForm} flex items-center gap-1`}>
             <span>Çıplak Brüt Ücret *</span>
             <span className="text-gray-500 dark:text-gray-400 text-xs" title="TL cinsinden brüt ücret.">ℹ️</span>
           </label>
-          <input value={brut} onChange={(e) => setBrut(e.target.value)} placeholder="Örn: 25.000,00" className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
+          <input value={brut} onChange={(e) => setBrut(e.target.value)} placeholder="Örn: 25.000,00" className={`w-full ${inputClsForm}`} />
           {asgariHata && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">{asgariHata}</p>
           )}
@@ -568,26 +616,39 @@ export default function KidemTazminatiForm({
 
       {/* Ekstra Hesaplamalar - Davacı Ücreti ile aynı düzen */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <div className="w-6 h-6 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg flex items-center justify-center text-indigo-600 dark:text-indigo-400">₺</div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200 inline-flex items-center gap-2 whitespace-nowrap">
+            <div className="w-6 h-6 shrink-0 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg flex items-center justify-center text-xs text-indigo-600 dark:text-indigo-400">
+              ₺
+            </div>
             Ekstra Hesaplamalar
           </h2>
-          <div className="flex gap-3">
+          <div className="flex flex-row flex-nowrap gap-2 shrink-0">
             <button
+              type="button"
               onClick={() => setShowImportModal(true)}
-              className="px-4 py-2.5 rounded-full font-medium text-sm bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-blue-400 dark:hover:border-blue-500 transition-all flex items-center gap-2"
+              className="flex-1 sm:flex-none min-w-0 px-2 py-1.5 rounded border text-xs font-medium bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 inline-flex items-center justify-center gap-1"
             >
-              <Download className="w-4 h-4" />
-              İçe Aktar
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">İçe Aktar</span>
             </button>
             <button
+              type="button"
               onClick={() => setShowSaveModal(true)}
-              disabled={!(extras.length > 0 || (prim && prim.trim()) || (ikramiye && ikramiye.trim()) || (yol && yol.trim()) || (yemek && yemek.trim()))}
-              className="px-4 py-2.5 rounded-full font-medium text-sm bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-green-400 dark:hover:border-green-500 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={
+                !(
+                  extras.length > 0 ||
+                  (prim && prim.trim()) ||
+                  (ikramiye && ikramiye.trim()) ||
+                  (yol && yol.trim()) ||
+                  (yemek && yemek.trim()) ||
+                  (showDigerInput && diger && diger.trim())
+                )
+              }
+              className="flex-1 sm:flex-none min-w-0 px-2 py-1.5 rounded border text-xs font-medium bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 inline-flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Save className="w-4 h-4" />
-              Kaydet
+              <Save className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Kaydet</span>
             </button>
           </div>
         </div>
@@ -597,67 +658,254 @@ export default function KidemTazminatiForm({
         </p>
         <div className="space-y-2">
           {showPrimInput && (
-            <div className="flex items-center gap-2">
-              <input disabled value="Prim" className="w-40 sm:w-56 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 text-gray-700 dark:text-gray-300" />
-              <div className="flex-1 flex items-center gap-2">
-                <input value={prim} onChange={(e) => setPrim(e.target.value)} placeholder="Örn: 2.500,00" className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
-                <button type="button" className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium whitespace-nowrap px-4 py-2.5 rounded-full border border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500" onClick={() => onRequestEklenti?.("prim", "Prim için eklenti hesapla", (v) => setPrim(String(v.toFixed(2)).replace('.', ',')))}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <input disabled value="Prim" className={inputFixedLabelClsForm} />
+                <input
+                  value={prim}
+                  onChange={(e) => setPrim(e.target.value)}
+                  placeholder="Örn: 2.500,00"
+                  className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                <button
+                  type="button"
+                  className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                  onClick={() =>
+                    onRequestEklenti?.("prim", "Prim için eklenti hesapla", (v) =>
+                      setPrim(String(v.toFixed(2)).replace(".", ","))
+                    )
+                  }
+                >
                   Eklenti Hesapla
-                  <span className="text-orange-500 dark:text-orange-400 cursor-help ml-1" title="Son 12 ayın prim değerlerini girerek aylık ortalama tutarı otomatik hesaplayın">ⓘ</span>
+                  <span
+                    className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                    title="Son 12 ayın prim değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                  >
+                    ⓘ
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrim("")}
+                  className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  aria-label="Temizle"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              <button type="button" onClick={() => setPrim("")} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition-colors text-red-500 dark:text-red-400" aria-label="Temizle">
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
           )}
           {showIkramiyeInput && (
-            <div className="flex items-center gap-2">
-              <input disabled value="İkramiye" className="w-40 sm:w-56 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 text-gray-700 dark:text-gray-300" />
-              <div className="flex-1 flex items-center gap-2">
-                <input value={ikramiye} onChange={(e) => setIkramiye(e.target.value)} placeholder="Örn: 1.000,00" className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
-                <button type="button" className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium whitespace-nowrap px-4 py-2.5 rounded-full border border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500" onClick={() => onRequestEklenti?.("ikramiye", "İkramiye için eklenti hesapla", (v) => setIkramiye(String(v.toFixed(2)).replace('.', ',')))}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <input disabled value="İkramiye" className={inputFixedLabelClsForm} />
+                <input
+                  value={ikramiye}
+                  onChange={(e) => setIkramiye(e.target.value)}
+                  placeholder="Örn: 1.000,00"
+                  className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                <button
+                  type="button"
+                  className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                  onClick={() =>
+                    onRequestEklenti?.("ikramiye", "İkramiye için eklenti hesapla", (v) =>
+                      setIkramiye(String(v.toFixed(2)).replace(".", ","))
+                    )
+                  }
+                >
                   Eklenti Hesapla
-                  <span className="text-orange-500 dark:text-orange-400 cursor-help ml-1" title="Son 12 ayın ikramiye değerlerini girerek aylık ortalama tutarı otomatik hesaplayın">ⓘ</span>
+                  <span
+                    className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                    title="Son 12 ayın ikramiye değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                  >
+                    ⓘ
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIkramiye("")}
+                  className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  aria-label="Temizle"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              <button type="button" onClick={() => setIkramiye("")} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition-colors text-red-500 dark:text-red-400" aria-label="Temizle">
-                <Trash2 className="w-4 h-4" />
-              </button>
+            </div>
+          )}
+          {showYolInput && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <input disabled value="Yol" className={inputFixedLabelClsForm} />
+                <input
+                  value={yol}
+                  onChange={(e) => setYol(e.target.value)}
+                  placeholder="Örn: 500,00"
+                  className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                <button
+                  type="button"
+                  className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                  onClick={() =>
+                    onRequestEklenti?.("yol", "Yol için eklenti hesapla", (v) =>
+                      setYol(String(v.toFixed(2)).replace(".", ","))
+                    )
+                  }
+                >
+                  Eklenti Hesapla
+                  <span
+                    className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                    title="Son 12 ayın yol bedeli değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                  >
+                    ⓘ
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setYol("")}
+                  className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  aria-label="Temizle"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
           {showYemekInput && (
-            <div className="flex items-center gap-2">
-              <input disabled value="Yemek" className="w-40 sm:w-56 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-600 text-gray-700 dark:text-gray-300" />
-              <div className="flex-1 flex items-center gap-2">
-                <input value={yemek} onChange={(e) => setYemek(e.target.value)} placeholder="Örn: 1.200,00" className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" />
-                <button type="button" className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium whitespace-nowrap px-4 py-2.5 rounded-full border border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500" onClick={() => onRequestEklenti?.("yemek", "Yemek için eklenti hesapla", (v) => setYemek(String(v.toFixed(2)).replace('.', ',')))}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <input disabled value="Yemek" className={inputFixedLabelClsForm} />
+                <input
+                  value={yemek}
+                  onChange={(e) => setYemek(e.target.value)}
+                  placeholder="Örn: 1.200,00"
+                  className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                <button
+                  type="button"
+                  className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                  onClick={() =>
+                    onRequestEklenti?.("yemek", "Yemek için eklenti hesapla", (v) =>
+                      setYemek(String(v.toFixed(2)).replace(".", ","))
+                    )
+                  }
+                >
                   Eklenti Hesapla
-                  <span className="text-orange-500 dark:text-orange-400 cursor-help ml-1" title="Son 12 ayın yemek bedeli değerlerini girerek aylık ortalama tutarı otomatik hesaplayın">ⓘ</span>
+                  <span
+                    className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                    title="Son 12 ayın yemek bedeli değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                  >
+                    ⓘ
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setYemek("")}
+                  className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  aria-label="Temizle"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              <button type="button" onClick={() => setYemek("")} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition-colors text-red-500 dark:text-red-400" aria-label="Temizle">
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
           )}
-          {showExtras && extras.map((it) => (
-            <div key={it.id} className="flex items-center gap-2">
-              <input value={it.label} onChange={(e) => setExtra(it.id, { label: e.target.value })} className="w-40 sm:w-56 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" placeholder="Kalem Adı" />
-              <div className="flex-1 flex items-center gap-2">
-                <input value={it.value} onChange={(e) => setExtra(it.id, { value: e.target.value })} className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100" placeholder="Tutar" />
-                <button type="button" className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium whitespace-nowrap px-4 py-2.5 rounded-full border border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500" onClick={() => onRequestEklenti?.("extra:" + it.id, "Eklenti Hesapla", (v) => setExtra(it.id, { value: String(v.toFixed(2)).replace(".", ",") }))}>
+          {showDigerInput && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <input disabled value="Diğer" className={inputFixedLabelClsForm} />
+                <input
+                  value={diger}
+                  onChange={(e) => setDiger(e.target.value)}
+                  placeholder="Örn: 1.000,00"
+                  className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                <button
+                  type="button"
+                  className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                  onClick={() =>
+                    onRequestEklenti?.("diger", "Diğer için eklenti hesapla", (v) =>
+                      setDiger(String(v.toFixed(2)).replace(".", ","))
+                    )
+                  }
+                >
                   Eklenti Hesapla
-                  <span className="text-orange-500 dark:text-orange-400 cursor-help ml-1" title="Son 12 ayın değerlerini girerek aylık ortalama tutarı otomatik hesaplayın">ⓘ</span>
+                  <span
+                    className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                    title="Son 12 ayın değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                  >
+                    ⓘ
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiger("")}
+                  className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  aria-label="Temizle"
+                >
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              <button type="button" onClick={() => removeExtra(it.id)} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition-colors text-red-500 dark:text-red-400" aria-label="Satırı Sil">
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
-          ))}
+          )}
+          {showExtras &&
+            extras.map((it) => (
+              <div key={it.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-nowrap sm:gap-2">
+                {/* Prim / İkramiye / Yemek ile aynı: mobilde de kısa etiket + tutar yan yana */}
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <input
+                    value={it.label}
+                    onChange={(e) => setExtra(it.id, { label: e.target.value })}
+                    className={`w-24 shrink-0 sm:w-28 ${inputClsForm}`}
+                    placeholder="Kalem"
+                  />
+                  <input
+                    value={it.value}
+                    onChange={(e) => setExtra(it.id, { value: e.target.value })}
+                    className={`min-w-0 flex-1 basis-0 ${inputClsForm}`}
+                    placeholder="Örn: 1.000,00"
+                  />
+                </div>
+                <div className="flex shrink-0 items-center justify-end gap-2 sm:justify-start">
+                  <button
+                    type="button"
+                    className="min-h-9 min-w-0 flex-1 px-2 py-1.5 text-center text-xs text-blue-600 dark:text-blue-400 sm:flex-none sm:whitespace-nowrap rounded border border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-gray-700"
+                    onClick={() =>
+                      onRequestEklenti?.("extra:" + it.id, "Eklenti Hesapla", (v) =>
+                        setExtra(it.id, { value: String(v.toFixed(2)).replace(".", ",") })
+                      )
+                    }
+                  >
+                    Eklenti Hesapla
+                    <span
+                      className="ml-1 cursor-help text-orange-500 dark:text-orange-400"
+                      title="Son 12 ayın değerlerini girerek aylık ortalama tutarı otomatik hesaplayın"
+                    >
+                      ⓘ
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeExtra(it.id)}
+                    className="shrink-0 p-2 text-red-500 transition-colors hover:rounded-full hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                    aria-label="Satırı Sil"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
           {showExtras && (
-            <button onClick={addExtra} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 text-sm font-medium px-4 py-2.5 rounded-full border border-dashed border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500">
+            <button onClick={addExtra} className="text-xs text-blue-600 dark:text-blue-400 py-1 px-2 border border-dashed border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700">
               + Ekle
             </button>
           )}
@@ -665,8 +913,8 @@ export default function KidemTazminatiForm({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-200 dark:border-gray-600 mt-4">
-        <div className="text-sm text-gray-600 dark:text-gray-400">Toplam</div>
-        <div className="text-base font-semibold text-gray-900 dark:text-gray-100">
+        <div className="text-xs text-gray-600 dark:text-gray-400">Toplam</div>
+        <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           {customTotalFormatter 
             ? customTotalFormatter(toplam)
             : new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(toplam)

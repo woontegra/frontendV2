@@ -1,40 +1,29 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { Menu, ChevronRight, ChevronDown } from "lucide-react";
+import { Menu, ChevronRight, ChevronDown, Shield } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 
+/** Sıra: v1 Sidebar employmentItems ile uyumlu (v2’de olan sayfalar) */
 const MENU_ITEMS = [
   { id: "davaci-ucreti", label: "Davacı Ücreti", to: "/davaci-ucreti" },
-  {
-    id: "kidem-tazminati",
-    label: "Kıdem Tazminatı",
-    to: "#",
-    children: [
-      { id: "kidem-30isci", label: "İş Kanununa Göre", to: "/kidem-tazminati/30isci" },
-      { id: "kidem-borclar", label: "Borçlar Kanunu", to: "/kidem-tazminati/borclar" },
-      { id: "kidem-gemi", label: "Gemi Adamları", to: "/kidem-tazminati/gemi" },
-    ],
-  },
-  {
-    id: "ihbar-tazminati",
-    label: "İhbar Tazminatı",
-    to: "#",
-    children: [
-      { id: "ihbar-30isci", label: "İş Kanununa Göre", to: "/ihbar-tazminati/30isci" },
-    ],
-  },
-  {
-    id: "fazla-mesai",
-    label: "Fazla Mesai Alacağı",
-    to: "#",
-    children: [
-      { id: "fm-standart", label: "Standart Fazla Mesai", to: "/fazla-mesai/standart" },
-      { id: "fm-tanikli", label: "Tanıklı Standart", to: "/fazla-mesai/tanikli-standart" },
-    ],
-  },
+  /** v1 ile aynı: alt menü yok; tıklanınca kart sayfasına gider, sağda ok (alt sayfa olduğunu gösterir) */
+  { id: "kidem-tazminati", label: "Kıdem Tazminatı", to: "/kidem-tazminati", hasSubPages: true },
+  /** Kıdem ile aynı: tıklanınca kart seçim sayfası (/ihbar-tazminati) */
+  { id: "ihbar-tazminati", label: "İhbar Tazminatı", to: "/ihbar-tazminati", hasSubPages: true },
+  /** Kıdem / İhbar ile aynı: tıklanınca kart seçim sayfası (/fazla-mesai) */
+  { id: "fazla-mesai", label: "Fazla Mesai Alacağı", to: "/fazla-mesai", hasSubPages: true },
+  { id: "yillik-izin", label: "Yıllık Ücretli İzin Alacağı", to: "/yillik-izin", hasSubPages: true },
   { id: "ucret", label: "Ücret Alacağı", to: "/ucret-alacagi" },
+  { id: "is-arama-izni", label: "İş Arama İzni Ücreti", to: "/is-arama-izni-ucreti" },
+  { id: "bakiye-ucret", label: "Bakiye Ücret Alacağı", to: "/bakiye-ucret-alacagi" },
   { id: "prim", label: "Prim Alacağı", to: "/prim-alacagi" },
-  { id: "ubgt", label: "UBGT Alacağı", to: "/ubgt-alacagi" },
-  { id: "hafta-tatili", label: "Hafta Tatili Alacağı", to: "/hafta-tatili-alacagi/standard" },
+  { id: "kotu-niyet", label: "Kötü Niyet Tazminatı", to: "/kotu-niyet-tazminati" },
+  { id: "bosta-gecen-sure", label: "Boşta Geçen Süre Ücreti", to: "/bosta-gecen-sure-ucreti" },
+  { id: "ubgt", label: "UBGT Alacağı", to: "/ubgt" },
+  { id: "hafta-tatili", label: "Hafta Tatili Alacağı", to: "/hafta-tatili", hasSubPages: true },
+  { id: "ise-almama", label: "İşe Başlatmama Tazminatı", to: "/ise-almama-tazminati" },
+  { id: "ayrimcilik", label: "Ayrımcılık Tazminatı", to: "/ayrimcilik-tazminati" },
+  { id: "haksiz-fesih", label: "Haksız Fesih Tazminatı", to: "/haksiz-fesih-tazminati" },
 ];
 
 type Props = {
@@ -44,8 +33,11 @@ type Props = {
 
 export default function Sidebar({ collapsed, onClose }: Props) {
   const location = useLocation();
+  const { user } = useAuth();
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [mobileOpen, setMobileOpen] = useState(false);
+  const tenantId = Number(localStorage.getItem("tenant_id") || "1");
+  const isAdmin = user?.role === "admin" || tenantId === 1 || (user as { tenantId?: number })?.tenantId === 1;
 
   const toggleMenu = (id: string) => {
     setOpenMenus((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -83,6 +75,9 @@ export default function Sidebar({ collapsed, onClose }: Props) {
         : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
     }`;
 
+  const navLinkCls = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-2 py-2 px-2 rounded text-[12px] ${isActive ? "text-indigo-600 dark:text-indigo-400 font-medium" : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"}`;
+
   const sidebarContent = (
     <div className="flex flex-col h-full pt-14 lg:pt-3 px-2.5 pb-20 lg:pb-6 overflow-y-auto">
       <NavLink to="/dashboard" className={linkClass} onClick={handleNavClick}>
@@ -90,14 +85,38 @@ export default function Sidebar({ collapsed, onClose }: Props) {
         <span>Yönetim Paneli</span>
       </NavLink>
 
+      {isAdmin && (
+        <div className="mt-3 space-y-1">
+          <p className="px-2.5 py-1 text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">
+            Admin Paneli
+          </p>
+          <NavLink
+            to="/admin"
+            end
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[13px] font-medium transition-colors ${
+                isActive
+                  ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400"
+                  : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+              }`
+            }
+            onClick={handleNavClick}
+          >
+            <Shield className="w-4 h-4 flex-shrink-0" />
+            <span>Admin Paneli</span>
+          </NavLink>
+        </div>
+      )}
+
       <div className="mt-3 space-y-1">
         <p className="px-2.5 py-1 text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase">
           Hesaplamalar
         </p>
         {MENU_ITEMS.map((item) =>
-          item.children ? (
+          item.to === "#" && item.children?.length ? (
             <div key={item.id}>
               <button
+                type="button"
                 onClick={() => toggleMenu(item.id)}
                 className={`w-full flex items-center justify-between gap-2 px-2.5 py-2.5 rounded-lg text-[13px] font-medium transition-colors ${
                   openMenus[item.id]
@@ -135,13 +154,38 @@ export default function Sidebar({ collapsed, onClose }: Props) {
                 </ul>
               )}
             </div>
-          ) : (
+          ) : "hasSubPages" in item && item.hasSubPages ? (
             <NavLink
               key={item.id}
               to={item.to}
-              className={linkClass}
+              className={({ isActive }) =>
+                `group flex items-center rounded-lg px-2.5 py-2.5 text-[13px] font-medium transition-colors ${
+                  isActive
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                }`
+              }
               onClick={handleNavClick}
             >
+              {({ isActive }) => (
+                <div className="flex items-center min-w-0 w-full justify-between">
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <Menu className="w-4 h-4 flex-shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  <ChevronRight
+                    className={`w-4 h-4 flex-shrink-0 transition-transform group-hover:translate-x-0.5 ${
+                      isActive
+                        ? "text-white/90"
+                        : "text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-400"
+                    }`}
+                  />
+                </div>
+              )}
+            </NavLink>
+          ) : (
+            <NavLink key={item.id} to={item.to} className={linkClass} onClick={handleNavClick}>
+              <Menu className="w-4 h-4 flex-shrink-0" />
               <span>{item.label}</span>
             </NavLink>
           )

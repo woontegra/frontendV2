@@ -10,13 +10,14 @@ import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { usePageStyle } from "@/hooks/usePageStyle";
 import { getVideoLink } from "@/config/videoLinks";
-import { calcWorkPeriodBilirKisi } from "@/utils/dateUtils";
+import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
 import {
   segmentOvertimeResult,
   computeDisplayRows,
   calculateOvertimeWith270AndLimitation,
   getAsgariUcretByDate,
   calculateWeeksBetweenDates,
+  clampToLastDayOfMonth,
   buildWordTable,
   adaptToWordTable,
   copySectionForWord,
@@ -36,19 +37,18 @@ import { useStandartFazlaMesaiState } from "./state";
 import { fmt, fmtCurrency } from "./calculations";
 import { WEEKLY_WORK_LIMIT, FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI } from "./constants";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
-import { calculateIncomeTaxWithBrackets } from "@modules/fazla-mesai/shared";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
+import {
+  calcInputCls as inputCls,
+  calcTableInputCls as tableInputCls,
+  calcLabelCls as labelCls,
+  calcSectionTitleCls as sectionTitleCls,
+} from "@/shared/calcPageFormStyles";
 
 const PAGE_TITLE = "Standart Fazla Mesai Hesaplama";
 const RECORD_TYPE = "fazla_mesai_standart";
 const REDIRECT_BASE_PATH = "/fazla-mesai/standart";
-
-const inputCls =
-  "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-transparent";
-const tableInputCls =
-  "w-full min-w-0 px-1.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right";
-const labelCls = "block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5";
-const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200";
 
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
@@ -218,8 +218,9 @@ export default function StandartFazlaMesaiPage() {
 
   const rows = useMemo(() => {
     if (!iseGiris || !istenCikis || !davaci?.in || !davaci?.out || weeklyFMSaat <= 0) return [];
-    const result = { start: iseGiris, end: istenCikis };
-    const segments = segmentOvertimeResult(result);
+    try {
+      const result = { start: iseGiris, end: istenCikis };
+      const segments = segmentOvertimeResult(result);
     const tableRows: Array<Record<string, unknown> & FazlaMesaiRowBase> = [];
 
     segments.forEach((seg) => {
@@ -259,7 +260,10 @@ export default function StandartFazlaMesaiPage() {
       });
     });
 
-    return tableRows;
+      return tableRows;
+    } catch {
+      return [];
+    }
   }, [iseGiris, istenCikis, davaci?.in, davaci?.out, weeklyFMSaat, katSayi, zamanasimiBaslangic]);
 
   const computedDisplayRows = useMemo(() => {
@@ -296,8 +300,7 @@ export default function StandartFazlaMesaiPage() {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const sskPrim = totalBrut * 0.15;
-    const matrah = Math.max(0, totalBrut - sskPrim);
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
     const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
     const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
@@ -306,7 +309,7 @@ export default function StandartFazlaMesaiPage() {
       gelirVergisi,
       damgaVergisi,
       netYillik,
-      gelirVergisiDilimleri: gvResult.brackets || "",
+      gelirVergisiDilimleri: gvResult.brackets,
     };
   }, [totalBrut, exitYear]);
 
@@ -341,21 +344,18 @@ export default function StandartFazlaMesaiPage() {
 
   const addRow = useCallback(
     (afterRowId?: string) => {
-      const startISO = istenCikis || new Date().toISOString().slice(0, 10);
-      const endISO = istenCikis || new Date().toISOString().slice(0, 10);
-      const brut = getAsgariUcretByDate(startISO) || 0;
       setManualRows((prev) => [
         ...prev,
         {
           id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          startISO,
-          endISO,
-          rangeLabel: `${formatDateTR(startISO)} – ${formatDateTR(endISO)}`,
+          startISO: "",
+          endISO: "",
+          rangeLabel: "",
           weeks: 0,
           originalWeekCount: 0,
-          brut,
+          brut: 0,
           katsayi: katSayi ?? 1,
-          fmHours: weeklyFMSaat,
+          fmHours: 0,
           fm: 0,
           net: 0,
           isManual: true,
@@ -363,7 +363,7 @@ export default function StandartFazlaMesaiPage() {
         } as FazlaMesaiRowBase,
       ]);
     },
-    [istenCikis, katSayi, weeklyFMSaat]
+    [katSayi]
   );
 
   const removeRow = useCallback((rowId: string) => {
@@ -436,7 +436,7 @@ export default function StandartFazlaMesaiPage() {
     const s: Array<{ id: string; title: string; html: string; htmlForPdf: string }> = [];
     const n1 = adaptToWordTable({
       headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi", "Haftalık FM Saat"],
-      rows: [[iseGiris || "-", istenCikis || "-", diff.label, String(weeklyFMSaat.toFixed(2))]],
+      rows: [[isoToTR(iseGiris), isoToTR(istenCikis), diff.label, String(weeklyFMSaat.toFixed(2))]],
     });
     s.push({
       id: "ust",
@@ -790,7 +790,10 @@ export default function StandartFazlaMesaiPage() {
                               <input
                                 type="date"
                                 value={startISO}
-                                onChange={(e) => handleRowOverride(r.id, { startISO: e.target.value || undefined })}
+                                onChange={(e) => {
+                                const raw = e.target.value || "";
+                                handleRowOverride(r.id, { startISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                              }}
                                 className={`${tableInputCls} flex-1 min-w-0`}
                                 title="Başlangıç tarihi"
                               />
@@ -798,7 +801,10 @@ export default function StandartFazlaMesaiPage() {
                               <input
                                 type="date"
                                 value={endISO}
-                                onChange={(e) => handleRowOverride(r.id, { endISO: e.target.value || undefined })}
+                                onChange={(e) => {
+                                const raw = e.target.value || "";
+                                handleRowOverride(r.id, { endISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                              }}
                                 className={`${tableInputCls} flex-1 min-w-0`}
                                 title="Bitiş tarihi"
                               />

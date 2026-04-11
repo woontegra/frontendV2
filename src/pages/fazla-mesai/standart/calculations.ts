@@ -9,8 +9,9 @@ export function fmt(n: number | undefined): string {
   return (n ?? 0).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** Tutar + ₺ (sembol sağda: 47.858,46 ₺) */
 export function fmtCurrency(n: number | undefined): string {
-  return `${fmt(n)}₺`;
+  return `${fmt(n)} ₺`;
 }
 
 /** Fazla mesai brüt = (brüt × katSayi × hafta × fmHours) / 225 × 1.5 */

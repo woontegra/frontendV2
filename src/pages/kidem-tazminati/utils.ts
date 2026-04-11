@@ -92,6 +92,8 @@ export function calcWorkPeriodBilirKisi(
     const end = new Date(endDate);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
     if (end < start) return { years: 0, months: 0, days: 0, label: "0 Yıl 0 Ay 0 Gün" };
+    // Kapsayıcı hesaplama: işe giriş ve işten çıkış günleri dahil edilir
+    end.setDate(end.getDate() + 1);
     let years = end.getFullYear() - start.getFullYear();
     let months = end.getMonth() - start.getMonth();
     let days = end.getDate() - start.getDate();

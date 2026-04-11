@@ -35,6 +35,7 @@ import { fmtCurrency, parseNum, fmt } from "./calculations";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { adaptToWordTable } from "@/utils/wordTableAdapter";
 import { buildWordTable } from "@/utils/wordTableBuilder";
+import { isoToTR } from "@/utils/dateUtils";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { copySectionForWord } from "@/utils/copyTableForWord";
 
@@ -343,7 +344,7 @@ export default function Kidem30Page() {
   // html = modal (siyah beyaz), htmlForPdf = PDF (renkli)
   const wordTableSections = useMemo(() => {
     const s: Array<{ id: string; title: string; html: string; htmlForPdf: string }> = [];
-    const n1 = adaptToWordTable({ headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi"], rows: [[iseGiris || "-", istenCikis || "-", diff.label]] });
+    const n1 = adaptToWordTable({ headers: ["İşe Giriş", "İşten Çıkış", "Çalışma Süresi"], rows: [[isoToTR(iseGiris), isoToTR(istenCikis), diff.label]] });
     s.push({ id: "ust", title: "Tarih Bilgileri", html: buildWordTable(n1.headers, n1.rows), htmlForPdf: buildStyledReportTable(n1.headers, n1.rows) });
     const bilesen: { label: string; value: string }[] = [
       { label: "Çıplak Brüt", value: fmtCurrency(parseNum(formValues.brutUcret || formValues.brut)) },
@@ -547,7 +548,7 @@ export default function Kidem30Page() {
               <section>
                 <h2 className={sectionTitleCls}>Notlar</h2>
                 <div className="rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Çıplak Brüt Ücret işçinin işi yapmak için aldığı eklentisiz maaşından ibarettir. Prim, İkramiye gibi ücretlerin hesaplanmasında son 12 aylık bordroda yer alan tüm kalemler toplanır, toplam 360'a bölünür, 30 ile çarpılır.</p>
+                  <p className="text-[11px] font-light text-gray-500 dark:text-gray-400">Çıplak Brüt Ücret işçinin işi yapmak için aldığı eklentisiz maaşından ibarettir. Prim, İkramiye gibi ücretlerin hesaplanmasında son 12 aylık bordroda yer alan tüm kalemler toplanır, toplam 360'a bölünür, 30 ile çarpılır.</p>
                 </div>
               </section>
             </div>
@@ -628,10 +629,9 @@ export default function Kidem30Page() {
                 .report-section-copy .copy-icon-btn { background: transparent; border: none; cursor: pointer; padding: 0.25rem; border-radius: 0.375rem; color: #6b7280; }
                 .report-section-copy .copy-icon-btn:hover { background: #f3f4f6; color: #374151; }
                 #kidem-word-copy .section-content { border: none; overflow-x: auto; padding: 0; margin: 0; -webkit-overflow-scrolling: touch; }
-                #kidem-word-copy table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; font-size: 0.75rem; color: #111827; }
-                #kidem-word-copy td, #kidem-word-copy th { border: 1px solid #999; padding: 5px 8px; background: #fff !important; color: #111827 !important; }
-                #kidem-word-copy td:first-child, #kidem-word-copy th:first-child { width: 62%; min-width: 0; }
-                #kidem-word-copy td:last-child, #kidem-word-copy th:last-child { width: 38%; text-align: right; white-space: nowrap; }
+                #kidem-word-copy table { border-collapse: collapse; width: 100%; margin: 0; font-size: 0.75rem; color: #111827; }
+                #kidem-word-copy td, #kidem-word-copy th { border: 1px solid #999; padding: 5px 8px; background: #fff !important; color: #111827 !important; white-space: nowrap; }
+                #kidem-word-copy td:last-child, #kidem-word-copy th:last-child { text-align: right; width: 38%; }
               `}</style>
               <div id="kidem-word-copy">
                 {wordTableSections.map((sec) => (

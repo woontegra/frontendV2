@@ -21,6 +21,7 @@ export type HesapTuru =
   | "ucret_alacagi"
   | "prim_alacagi"
   | "ubgt_alacagi"
+  | "ubgt_bilirkisi"
   | "davaci_ucreti"
   | string;
 
