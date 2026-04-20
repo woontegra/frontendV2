@@ -97,8 +97,12 @@ export async function kaydetHesap(
       const netTotal = veri.net_total || veri.netTazminat || veri.totalNet || veri.net || 0;
       
       // Eski formatı yeni formata çevir
+      // formValues genelde kısa özet; form tam state (exclusions, manualRows, rowOverrides vb.).
+      // "formValues || form" kullanılırsa form hiç kullanılmaz — UBGT / dışlamalar kayda gitmez.
+      const fv = veri.formValues && typeof veri.formValues === "object" ? veri.formValues : {};
+      const fm = veri.form && typeof veri.form === "object" ? veri.form : {};
       dataPayload = {
-        form: veri.formValues || veri.form || {},
+        form: { ...fv, ...fm },
         results: {
           totals: veri.totals || {},
           brut: brutTotal,

@@ -9,6 +9,13 @@ export interface SeasonalPattern {
   endTime: string;
   /** Klasik dönemsel: haftalık gün (1–7). Dönemsel haftalıkta grup günleri kullanılır. */
   workDays?: number;
+  /** Klasik dönemsel: haftada 7 gün iken tatilli / tatilsiz (yaz ve kış ayrı). */
+  sevenDayMode?: "tatilli" | "tatilsiz";
+  /**
+   * Hafta tatilinin olduğu takvim günü (`Date.getDay()` — 0 Pazar … 6 Cumartesi). Yıllık izin / UBGT takviminde bu gün atlanır.
+   * Klasik dönemsel: 7 gün + hafta tatilli iken. Dönemsel haftalık (davacı): toplam 7 gün + «Hafta tatili var» iken.
+   */
+  weeklyHolidayWeekday?: number;
   /** Dönemsel haftalık — Grup 1 */
   days1?: number;
   /** Dönemsel haftalık — Grup 2 */
@@ -38,18 +45,33 @@ export interface DonemselState {
   witnessesSeasons: DonemselWitness[];
 }
 
+/** Hafta tatili günü seçenekleri (JS `Date.getDay()`). */
+export const SEASONAL_WEEKLY_HOLIDAY_GETDAY_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1, label: "Pazartesi" },
+  { value: 2, label: "Salı" },
+  { value: 3, label: "Çarşamba" },
+  { value: 4, label: "Perşembe" },
+  { value: 5, label: "Cuma" },
+  { value: 6, label: "Cumartesi" },
+  { value: 0, label: "Pazar" },
+];
+
 export const DEFAULT_SUMMER_PATTERN: SeasonalPattern = {
   months: [4, 5, 6, 7, 8, 9],
-  startTime: "08:00",
-  endTime: "20:00",
+  startTime: "",
+  endTime: "",
   workDays: 6,
+  sevenDayMode: "tatilsiz",
+  weeklyHolidayWeekday: 0,
 };
 
 export const DEFAULT_WINTER_PATTERN: SeasonalPattern = {
   months: [1, 2, 3, 10, 11, 12],
-  startTime: "09:00",
-  endTime: "18:00",
+  startTime: "",
+  endTime: "",
   workDays: 6,
+  sevenDayMode: "tatilsiz",
+  weeklyHolidayWeekday: 0,
 };
 
 /** Dönemsel haftalık — gün sayıları boş başlar; toplam 7 olunca hafta tatili seçilebilir */

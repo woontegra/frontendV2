@@ -6,6 +6,7 @@ const initialForm: FormValues = {
   iseGiris: "",
   istenCikis: "",
   weeklyDays: "6",
+  haftaTatiliGunu: "",
   davaci: { in: "", out: "" },
   mode270: "none",
   katSayi: 1,

@@ -9,7 +9,7 @@ function isDebugPipeline(): boolean {
   return typeof window !== "undefined" && !!(window as any).__FM_DEBUG_PIPELINE__;
 }
 
-import { applyAnnualLeaveExclusions } from "./applyAnnualLeaveExclusions";
+import { applyAnnualLeaveExclusions, type RowWithExclusionFields } from "./applyAnnualLeaveExclusions";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
 import { calculateWeeksBetweenDates } from "@/utils/dateUtils";
 
@@ -19,6 +19,17 @@ export const FAZLA_MESAI_KATSAYI = 1.5;
 export const DAMGA_VERGISI_ORANI = 0.00759;
 export const GELIR_VERGISI_ORANI = 0.15;
 export const INCLUDED_OVERTIME_HOURS = 270;
+
+const YARGITAY_HAFTALIK_270_DUSUM_SAAT = 5.2;
+
+/**
+ * Yargıtay 270 (basit): her satırın haftalık FM saatinden 5,2 düşer.
+ * `5.2` ikili gösterimde 6 − 5,2 → 0,799999… gibi IEEE gürültüsü üretir; cetvelde 0,8 görünmesi için snap.
+ */
+function fmHoursAfterYargitay270Simple(haftalikFmSaat: number): number {
+  const raw = Math.max(0, (Number(haftalikFmSaat) || 0) - YARGITAY_HAFTALIK_270_DUSUM_SAAT);
+  return Math.round(raw * 1e4) / 1e4;
+}
 
 /** Pipeline'da kullanılan satır tipi (sayfa tipleri bu alanları içermeli) */
 export interface FazlaMesaiRowBase {
@@ -76,6 +87,11 @@ export interface ComputeDisplayRowsInput<T extends FazlaMesaiRowBase> {
   calculateOvertime270Detailed?: CalculateOvertime270Detailed;
   /** true: Ham takvim haftaları göster (270 düşümü hafta sütununa uygulanmaz). Haftalık Karma için kullanılır. */
   useRawWeeks?: boolean;
+  /**
+   * true: Otomatik satırlarda yıllık izin zaten sayfa tarafında işlendi (örn. Standart 6 gün haftalık bölme).
+   * Manuel satırlarda applyAnnualLeaveExclusions uygulanmaya devam eder.
+   */
+  skipAnnualLeaveExclusions?: boolean;
 }
 
 /**
@@ -159,6 +175,7 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     zamanasimiBaslangic,
     calculateOvertime270Detailed,
     useRawWeeks,
+    skipAnnualLeaveExclusions,
   } = input;
 
   const kats = katSayi || 1;
@@ -178,7 +195,13 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
       const merged = { ...row, ...override } as T;
       const startISO = (merged as FazlaMesaiRowBase).startISO ?? row.startISO;
       const endISO = (merged as FazlaMesaiRowBase).endISO ?? row.endISO;
-      const weeksFromDates = startISO && endISO ? calculateWeeksBetweenDates(startISO, endISO) : undefined;
+      // Tarihten hafta yeniden hesaplama yalnız tarih override edilirse yapılır.
+      // Aksi halde kayıttan gelen/hesaplanan row.weeks değeri korunur (özellikle 52/53 düzeltmeleri için).
+      const hasDateOverride = override.startISO !== undefined || override.endISO !== undefined;
+      const weeksFromDates =
+        hasDateOverride && startISO && endISO
+          ? calculateWeeksBetweenDates(startISO, endISO)
+          : undefined;
       // override.weeks 0 geldiyse (kaydedilmiş hatalı veri) tarihten hesaplananı kullan; 0 ?? 11 = 0 olduğu için
       let effectiveWeeks = override.weeks ?? weeksFromDates ?? row.weeks;
       if (effectiveWeeks <= 0 && (weeksFromDates ?? row.weeks ?? 0) > 0) effectiveWeeks = weeksFromDates ?? row.weeks ?? effectiveWeeks;
@@ -257,6 +280,13 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
   if (useRawWeeks) {
     // Ham takvim haftaları Hafta sütununda gösterilir - Haftalık Karma için
     const getRawWeeks = (r: T) => {
+      // Yıllık izin / UBGT V2 (sayfa tarafında bölünmüş satırlar): baz satırda tarih aralığı
+      // hâlâ tam dönem iken `weeks` kasıtlı olarak takvim haftasından küçük olabilir.
+      // Tarihten yeniden hafta hesaplamak bu düşümü yok eder (ör. 51 → 52).
+      if (skipAnnualLeaveExclusions) {
+        const fromRow = r.originalWeekCount ?? r.weeks;
+        if (fromRow != null && fromRow > 0) return fromRow;
+      }
       const fromDates = r.startISO && r.endISO ? calculateWeeksBetweenDates(r.startISO, r.endISO) : undefined;
       return fromDates ?? r.originalWeekCount ?? r.weeks ?? 0;
     };
@@ -267,7 +297,7 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     })) as T[];
 
     if (mode270 === "simple") {
-      with270 = withRaw.map((r) => ({ ...r, fmHours: Math.max(0, (r.fmHours ?? 0) - 5.2) })) as T[];
+      with270 = withRaw.map((r) => ({ ...r, fmHours: fmHoursAfterYargitay270Simple(r.fmHours ?? 0) })) as T[];
     } else if (mode270 === "detailed") {
       with270 = apply270RuleFrontend(withRaw) as T[];
     } else {
@@ -275,10 +305,9 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     }
   } else if (mode270 !== "none") {
     if (mode270 === "simple") {
-      const YARGITAY_270 = 5.2;
       with270 = with270.map((r) => ({
         ...r,
-        fmHours: Math.max(0, (r.fmHours ?? 0) - YARGITAY_270),
+        fmHours: fmHoursAfterYargitay270Simple(r.fmHours ?? 0),
       })) as T[];
     } else if (mode270 === "detailed") {
       const valid = with270.filter((r) => r.startISO && r.endISO);
@@ -325,7 +354,17 @@ export function computeDisplayRows<T extends FazlaMesaiRowBase>(
     }
   }
 
-  const afterExclusions = applyAnnualLeaveExclusions(with270, exclusions, { minWeeks: 1 });
+  const afterExclusions = (() => {
+    if (!exclusions?.length) return with270;
+    if (skipAnnualLeaveExclusions) {
+      return with270.map((r) => {
+        const isManual = !!(r.manual ?? r.isManual);
+        if (!isManual) return r;
+        return applyAnnualLeaveExclusions([r as RowWithExclusionFields], exclusions, { minWeeks: 1 })[0] as T;
+      });
+    }
+    return applyAnnualLeaveExclusions(with270, exclusions, { minWeeks: 1 });
+  })();
   if (isDebugPipeline()) {
     const zeros = afterExclusions.filter((r) => (r.weeks ?? 0) <= 0);
     if (zeros.length) console.log("[computeDisplayRows] SONUÇ: Hafta=0 olan satırlar:", zeros.map((r) => ({ id: r.id, startISO: r.startISO, endISO: r.endISO, weeks: r.weeks })));

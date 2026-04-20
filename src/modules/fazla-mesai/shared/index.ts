@@ -40,6 +40,10 @@ export { normalizeLocalDate } from "./utils/dateHelpers";
 export { generateDynamicIntervals, calculateIntervals, generateDynamicIntervalsFromWitnesses, calculateOvertimeHours } from "./utils/intervalHelper";
 export { calculateOvertimeWith270AndLimitation } from "./utils/calculateOvertimeWith270AndLimitation";
 export { segmentOvertimeResult, splitByAsgariUcretPeriods } from "./utils/dateSegmentationCore";
+export {
+  buildMergedWitnessSegments,
+  type WitnessFmBoundaryInput,
+} from "./utils/witnessOvertimeSegments";
 export { asgariUcretler, getAsgariUcretByDate } from "./constants/asgariUcretler";
 export { calculateOvertimeTable } from "./utils/calculateOvertimeTable";
 export { calculateOvertime } from "./utils/overtimeCalculator";

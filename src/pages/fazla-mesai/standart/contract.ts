@@ -22,6 +22,7 @@ export interface FormValues {
   iseGiris: string;
   istenCikis: string;
   weeklyDays: number | string;
+  haftaTatiliGunu: number | "";
   davaci: { in: string; out: string };
   mode270: Mode270;
   katSayi: number;

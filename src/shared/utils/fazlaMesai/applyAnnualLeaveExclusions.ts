@@ -1,11 +1,12 @@
 /**
- * Yıllık izin dışlamalarını hesaplama tablosu satırlarına uygular.
- * Kullanıcının girdiği "gün" (excl.days) kullanılır; tarihten hesaplanan değil.
- * Tüm yıllık izin dışlaması yapan sayfalarda import edilerek kullanılır.
+ * Yıllık izin / UBGT / diğer dışlamaları hesaplama tablosu satırlarına uygular.
+ * Satır aralığında dışlama ile örtüşen takvim günleri toplanır; hafta düşümü satırın
+ * takvim günü sayısına orantılı yapılır (UBGT gibi 1–3 günlük kesitlerde yuvarlama ile 0 hafta kalması önlenir).
  */
 
-import { differenceInCalendarDays } from "date-fns";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
+import { differenceInCalendarDays, isValid, parseISO, startOfDay } from "date-fns";
+import { countAnnualLeaveCalendarDaysInWindow } from "./annualLeaveCalendarDays";
 
 export interface RowWithExclusionFields {
   startISO: string;
@@ -19,14 +20,31 @@ export interface RowWithExclusionFields {
 }
 
 export interface ApplyAnnualLeaveExclusionsOptions {
-  /** Düşüm sonrası satırda en az bu kadar hafta kalır (örn. 1 = Tanıklı Standart, 0 = Haftalık Karma). */
+  /** Dışlama satırı takvimini tamamen kapladığında en az bu kadar hafta bırakılır (0 ise tamamen sıfırlanabilir). */
   minWeeks?: number;
 }
 
+/** UBGT tek gün kaydında `days` > 1 ise takvim tekilliği 1 sayar; kalan bilanço günü burada eklenir. */
+function ubgExtraBalanceDays(rowStart: Date, rowEnd: Date, exclusions: ExcludedDay[]): number {
+  let extra = 0;
+  for (const ex of exclusions) {
+    if (ex.type !== "UBGT") continue;
+    const s = (ex.start || "").slice(0, 10);
+    const e = (ex.end || "").slice(0, 10);
+    if (!s || s !== e) continue;
+    const dnum = Math.floor(Number(ex.days) || 1);
+    if (dnum <= 1) continue;
+    const d = startOfDay(parseISO(s));
+    if (!isValid(d) || d < rowStart || d > rowEnd) continue;
+    extra += dnum - 1;
+  }
+  return extra;
+}
+
 /**
- * Satır listesine yıllık izin dışlaması uygular.
- * Her satır için: kesişen dışlamalarda (kesişen gün / dışlama span) * excl.days payı hesaplanır,
- * toplam gün / 7 yuvarlanarak hafta düşümü yapılır.
+ * Satır listesine dışlama uygular.
+ * Örtüşen takvim günü ağırlığı (UBGT `days` dahil) satırın gün sayısından düşülür;
+ * kalan oran `weeks` ile çarpılarak yeni hafta ve FM hesaplanır.
  */
 export function applyAnnualLeaveExclusions<T extends RowWithExclusionFields>(
   rows: T[],
@@ -42,31 +60,28 @@ export function applyAnnualLeaveExclusions<T extends RowWithExclusionFields>(
   return rows.map((row) => {
     if (!row.startISO || !row.endISO) return row;
 
-    const rowStart = new Date(row.startISO);
-    const rowEnd = new Date(row.endISO);
+    const rowStart = startOfDay(parseISO(row.startISO.slice(0, 10)));
+    const rowEnd = startOfDay(parseISO(row.endISO.slice(0, 10)));
+    if (!isValid(rowStart) || !isValid(rowEnd) || rowStart > rowEnd) return row;
 
-    let totalOverlapDays = 0;
-    exclusions.forEach((excl) => {
-      const exclStart = new Date(excl.start);
-      const exclEnd = new Date(excl.end);
-      if (exclStart > rowEnd || exclEnd < rowStart) return;
+    const calendarOverlapDays = countAnnualLeaveCalendarDaysInWindow(rowStart, rowEnd, exclusions);
+    const ubgExtra = ubgExtraBalanceDays(rowStart, rowEnd, exclusions);
+    let totalWeightedDays = calendarOverlapDays + ubgExtra;
+    if (totalWeightedDays <= 0) return row;
 
-      const overlapStart = exclStart > rowStart ? exclStart : rowStart;
-      const overlapEnd = exclEnd < rowEnd ? exclEnd : rowEnd;
-      const overlapCalendarDays = Math.max(0, differenceInCalendarDays(overlapEnd, overlapStart) + 1);
-      const exclCalendarSpan = Math.max(1, differenceInCalendarDays(exclEnd, exclStart) + 1);
-      const effectiveExclDays =
-        typeof excl.days === "number" && excl.days >= 0 ? excl.days : exclCalendarSpan;
-      const rowShare = (overlapCalendarDays / exclCalendarSpan) * effectiveExclDays;
-      totalOverlapDays += rowShare;
-    });
+    const rowCalendarDays = Math.max(1, differenceInCalendarDays(rowEnd, rowStart) + 1);
+    totalWeightedDays = Math.min(totalWeightedDays, rowCalendarDays);
 
-    if (totalOverlapDays <= 0) return row;
+    const productiveDays = Math.max(0, rowCalendarDays - totalWeightedDays);
+    const rw = Number(row.weeks) || 0;
 
-    const weeksToDeduct = Math.round(totalOverlapDays / 7);
-    if (weeksToDeduct === 0) return row;
+    let newWeeks: number;
+    if (productiveDays <= 0) {
+      newWeeks = Math.max(0, minWeeks);
+    } else {
+      newWeeks = rw * (productiveDays / rowCalendarDays);
+    }
 
-    const newWeeks = Math.max(minWeeks, row.weeks - weeksToDeduct);
     const newFm = (newWeeks * row.brut * row.katsayi * row.fmHours) / 225 * 1.5;
 
     return {

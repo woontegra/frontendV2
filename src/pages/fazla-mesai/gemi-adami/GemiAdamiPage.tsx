@@ -13,7 +13,9 @@ import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
 import { apiClient, apiPost } from "@/utils/apiClient";
 import { buildWordTable, adaptToWordTable, copySectionForWord } from "@modules/fazla-mesai/shared";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
+import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
 import { NotlarAccordion } from "../standart/NotlarAccordion";
@@ -22,7 +24,9 @@ import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { useTanikliStandartState } from "../tanikli-standart/state";
 import { fmt, fmtCurrency } from "../standart/calculations";
+import { ceilWeeklyWorkHoursToHalfHour } from "@/shared/utils/fazlaMesai/weeklyHoursRounding";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 
 const REDIRECT_BASE = "/fazla-mesai/gemi-adami";
 const RECORD_GUNLUK = "fazla_mesai_gemi_gunluk";
@@ -230,6 +234,21 @@ export default function GemiAdamiPage() {
 
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
 
+  const ubgtFmCatalogRange = useMemo(() => {
+    const dIn = (iseGiris || davaci?.dateIn || "").slice(0, 10);
+    const dOut = (istenCikis || davaci?.dateOut || "").slice(0, 10);
+    let start = dIn;
+    let end = dOut;
+    for (const t of taniklar) {
+      const a = (t.dateIn || "").slice(0, 10);
+      const b = (t.dateOut || "").slice(0, 10);
+      if (a && (!start || a < start)) start = a;
+      if (b && (!end || b > end)) end = b;
+    }
+    if (!start || !end || start > end) return { start: "", end: "" };
+    return { start, end };
+  }, [iseGiris, istenCikis, davaci?.dateIn, davaci?.dateOut, taniklar]);
+
   const handleFormChange = useCallback(
     (updates: Partial<typeof formValues>) => {
       setFormValues((p) => {
@@ -375,10 +394,61 @@ export default function GemiAdamiPage() {
             };
           });
 
+          // ── HER SATIR İÇİN EN İYİ TANIK FM OVERRIDE + AYNI FM'Lİ SATIRLARI BİRLEŞTİR ──
+          const _toMin = (t: string) => { const [h, m] = (t || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+          const _computeBreak = (b: number) => {
+            if (!Number.isFinite(b) || b <= 0) return 0;
+            if (b <= 4) return 0.25; if (b <= 7.5) return 0.5;
+            if (b < 11) return 1; if (b < 14) return 1.5; if (b < 15) return 2; return 3;
+          };
+          const _dIn = _toMin(davaci?.in || ""); const _dOut = _toMin(davaci?.out || "");
+          const _hg = Number(weeklyDays) || 6;
+          const _tanikFM = taniklar
+            .filter((t) => t.dateIn && t.dateOut && t.in && t.out)
+            .map((t) => {
+              const tIn = Math.max(_toMin(t.in), _dIn); const tOut = Math.min(_toMin(t.out), _dOut);
+              const brut = Math.max(0, (tOut - tIn) / 60); const brk = _computeBreak(brut);
+              const net = Math.max(0, brut - brk);
+              const fm = Math.max(0, ceilWeeklyWorkHoursToHalfHour(net * _hg) - 45);
+              return { startMs: new Date(t.dateIn).getTime(), endMs: new Date(t.dateOut).getTime(), fmHours: fm };
+            });
+
+          // Her satır için: o tarihi kapsayan aktif tanıklar arasından en yüksek FM seç
+          const withBestFM = fromBackend.map((row) => {
+            const rS = new Date(row.startISO).getTime(); const rE = new Date(row.endISO).getTime();
+            const active = _tanikFM.filter((t) => t.startMs <= rS && t.endMs >= rE);
+            if (active.length === 0) return row;
+            const best = active.reduce((p, c) => (c.fmHours > p.fmHours ? c : p));
+            if (best.fmHours === row.fmHours) return row;
+            const { fm, net } = recalcGemiFmNet(row, best.fmHours, katSayi || 1);
+            return { ...row, fmHours: best.fmHours, fm, net };
+          });
+
+          // Ardışık aynı FM saatli satırları birleştir (hafta toplamı doğru olsun)
+          const merged: typeof withBestFM = [];
+          for (const row of withBestFM) {
+            const last = merged[merged.length - 1];
+            if (last && last.fmHours === row.fmHours && last.brut === row.brut && last.katsayi === row.katsayi) {
+              const totalWeeks = (last.weeks || 0) + (row.weeks || 0);
+              const { fm, net } = recalcGemiFmNet({ ...last, weeks: totalWeeks }, last.fmHours, katSayi || 1);
+              merged[merged.length - 1] = {
+                ...last,
+                endISO: row.endISO,
+                rangeLabel: `${last.rangeLabel?.split(" – ")[0] ?? ""} – ${row.rangeLabel?.split(" – ")[1] ?? ""}`,
+                weeks: totalWeeks,
+                fm: String(fm), net: String(net),
+              };
+            } else {
+              merged.push({ ...row });
+            }
+          }
+          const processedFromBackend = merged;
+          // ──────────────────────────────────────────────────────────────────────
+
           setRows((prev) => {
-            if (fromBackend.length === 0) return fromBackend;
-            if (prev.length !== fromBackend.length) return fromBackend;
-            return fromBackend.map((backendRow, idx) => {
+            if (processedFromBackend.length === 0) return processedFromBackend;
+            if (prev.length !== processedFromBackend.length) return processedFromBackend;
+            return processedFromBackend.map((backendRow, idx) => {
               const cur = prev[idx];
               if (cur?.fmManual && cur.fmHours !== undefined) {
                 const { fm, net } = recalcGemiFmNet(backendRow, cur.fmHours, katSayi || 1);
@@ -424,17 +494,23 @@ export default function GemiAdamiPage() {
 
   const totalBrut = useMemo(() => rows.reduce((a, r) => a + (r.fm || 0), 0), [rows]);
 
+  const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const sskPrim = totalBrut * 0.15;
-    const matrah = Math.max(0, totalBrut - sskPrim);
-    const gelirVergisi = Math.round(matrah * GELIR_VERGISI_BIRINCI_DILIM_ORANI * 100) / 100;
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
-    return { gelirVergisi, damgaVergisi, netYillik, gelirVergisiDilimleri: "(%15)" };
-  }, [totalBrut]);
+    return {
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets,
+    };
+  }, [totalBrut, exitYear]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -589,11 +665,11 @@ export default function GemiAdamiPage() {
       htmlForPdf: buildStyledReportTable(n3.headers, n3.rows, { lastRowBg: "green" }),
     });
 
-    if (mahsupNum > 0) {
+    {
       const mahsupRows: { label: string; value: string }[] = [
         { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
-        { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
+        ...(mahsupNum > 0 ? [{ label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` }] : []),
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
       ];
       const n4 = adaptToWordTable(mahsupRows);
@@ -933,14 +1009,24 @@ export default function GemiAdamiPage() {
               </p>
             </section>
 
-            <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+            <div className="space-y-3">
+              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+              <UbgtFmDayPicker
+                rangeStart={ubgtFmCatalogRange.start}
+                rangeEnd={ubgtFmCatalogRange.end}
+                exclusions={exclusions}
+                setExclusions={setExclusions}
+                showToastError={showToastError}
+              />
+            </div>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla mesai cetveli</h2>
               </div>
+              <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
               <div className="overflow-x-auto p-2">
-                <table className="w-full text-xs border-collapse min-w-[680px]">
+                <table className="w-full text-xs border-collapse min-w-[680px] text-gray-900 dark:text-gray-100">
                   <thead>
                     <tr className="bg-gray-100 dark:bg-gray-700">
                       <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-left">Dönem</th>

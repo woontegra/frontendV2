@@ -18,6 +18,8 @@ import {
   buildWordTable,
   copySectionForWord,
   downloadPdfFromDOM,
+  getAsgariUcretByDate,
+  clampToLastDayOfMonth,
   type FazlaMesaiRowBase,
 } from "@modules/fazla-mesai/shared";
 import type { SeasonalPattern, DonemselWitness, DonemselState } from "./types";
@@ -27,22 +29,38 @@ import {
   DEFAULT_SUMMER_PATTERN_HAFTALIK,
   DEFAULT_WINTER_PATTERN_HAFTALIK,
 } from "./types";
-import { buildDonemselRows, calcFmHoursPerWeekHaftalik, fmt } from "./utils";
+import {
+  buildDonemselRows,
+  buildDonemselFmMetinCards,
+  calcFmHoursPerWeek,
+  calcFmHoursPerWeekHaftalik,
+  fmt,
+  workDaysFromPattern,
+  sevenModeFromPattern,
+  annualLeaveMetaFromSeasonalPattern,
+  weeklyIgnoredWeekdayFromSeasonalPattern,
+  toHtmlDateInputValue,
+} from "./utils";
+import { expandTanikliStandartRowsAnnualLeaveV2 } from "../tanikli-standart/tanikliStandartAnnualLeaveV2";
 import SeasonalWorkPatternEditor from "./components/SeasonalWorkPatternEditor";
 import WitnessSeasonalEditor from "./components/WitnessSeasonalEditor";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
+import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { Copy } from "lucide-react";
 
-const GELIR_VERGISI = 0.15;
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
 
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+const tableInputCls =
+  "w-full min-w-0 px-1.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right";
 const labelCls = "block text-xs font-normal text-gray-600 dark:text-gray-400 mb-0.5";
 const sectionTitleCls = "text-sm font-normal text-gray-800 dark:text-gray-200";
 
@@ -65,10 +83,11 @@ function normalizeLoadedWitnesses(raw: unknown, haftalik: boolean): DonemselWitn
     const w = (item?.winterPattern as SeasonalPattern) || {};
     if (haftalik) {
       return {
-        id: typeof item?.id === "number" ? item.id : idx + 1,
+        /** Sıra bazlı benzersiz id — kayıttaki çakışan id’ler React satırı / güncellemeyi bozmasın. */
+        id: idx + 1,
         name: (item?.name as string) || `Tanık ${idx + 1}`,
-        dateIn: (item?.dateIn ?? item?.startDateISO ?? "") as string,
-        dateOut: (item?.dateOut ?? item?.endDateISO ?? "") as string,
+        dateIn: toHtmlDateInputValue((item?.dateIn ?? item?.startDateISO ?? "") as string),
+        dateOut: toHtmlDateInputValue((item?.dateOut ?? item?.endDateISO ?? "") as string),
         summerPattern: {
           ...DEFAULT_SUMMER_PATTERN_HAFTALIK,
           ...s,
@@ -82,10 +101,10 @@ function normalizeLoadedWitnesses(raw: unknown, haftalik: boolean): DonemselWitn
       };
     }
     return {
-      id: typeof item?.id === "number" ? item.id : idx + 1,
+      id: idx + 1,
       name: (item?.name as string) || `Tanık ${idx + 1}`,
-      dateIn: (item?.dateIn ?? item?.startDateISO ?? "") as string,
-      dateOut: (item?.dateOut ?? item?.endDateISO ?? "") as string,
+      dateIn: toHtmlDateInputValue((item?.dateIn ?? item?.startDateISO ?? "") as string),
+      dateOut: toHtmlDateInputValue((item?.dateOut ?? item?.endDateISO ?? "") as string),
       summerPattern: { ...DEFAULT_SUMMER_PATTERN, ...s },
       winterPattern: { ...DEFAULT_WINTER_PATTERN, ...w },
     };
@@ -136,8 +155,6 @@ export default function DonemselPage() {
     emptyDonemselState(typeof window !== "undefined" ? window.location.pathname : "")
   );
 
-  const [weeklyDays, setWeeklyDays] = useState<string>("6");
-  const [activeTab, setActiveTab] = useState<"tatilsiz" | "tatilli">("tatilsiz");
   const [katSayi, setKatSayi] = useState(1);
   const [mode270, setMode270] = useState<"none" | "simple" | "detailed">("none");
   const [mahsuplasmaMiktari, setMahsuplasmaMiktari] = useState("");
@@ -153,7 +170,6 @@ export default function DonemselPage() {
   const [rowOverrides, setRowOverrides] = useState<Record<string, Partial<FazlaMesaiRowBase>>>({});
 
   const zamanasimiBaslangic = zamanasimi?.nihaiBaslangic || null;
-  const workDays = Math.max(1, Math.min(7, Number(weeklyDays) || 6));
 
   // Kayıt yükleme
   useEffect(() => {
@@ -171,18 +187,28 @@ export default function DonemselPage() {
         if (d) {
           const baseS = isDonemselHaftalik ? DEFAULT_SUMMER_PATTERN_HAFTALIK : DEFAULT_SUMMER_PATTERN;
           const baseW = isDonemselHaftalik ? DEFAULT_WINTER_PATTERN_HAFTALIK : DEFAULT_WINTER_PATTERN;
-          setDonemselState((p) => ({
-            dateIn: d.dateIn ?? p.dateIn,
-            dateOut: d.dateOut ?? p.dateOut,
-            summerPattern: d.summerPattern ? { ...baseS, ...d.summerPattern } : p.summerPattern,
-            winterPattern: d.winterPattern ? { ...baseW, ...d.winterPattern } : p.winterPattern,
-            witnessesSeasons: Array.isArray(d.witnessesSeasons)
-              ? normalizeLoadedWitnesses(d.witnessesSeasons, isDonemselHaftalik)
-              : p.witnessesSeasons,
-          }));
+          setDonemselState((p) => {
+            let summer = d.summerPattern ? { ...baseS, ...d.summerPattern } : p.summerPattern;
+            let winter = d.winterPattern ? { ...baseW, ...d.winterPattern } : p.winterPattern;
+            if (!isDonemselHaftalik && raw.weeklyDays != null) {
+              const wd = Math.max(1, Math.min(7, Number(raw.weeklyDays) || 6));
+              const tab = raw.activeTab === "tatilli" ? "tatilli" : "tatilsiz";
+              summer = { ...summer, workDays: wd, sevenDayMode: wd === 7 ? tab : "tatilsiz" };
+              winter = { ...winter, workDays: wd, sevenDayMode: wd === 7 ? tab : "tatilsiz" };
+            }
+            const rawDi = d.dateIn ?? p.dateIn;
+            const rawDo = d.dateOut ?? p.dateOut;
+            return {
+              dateIn: toHtmlDateInputValue(String(rawDi ?? "")),
+              dateOut: toHtmlDateInputValue(String(rawDo ?? "")),
+              summerPattern: summer,
+              winterPattern: winter,
+              witnessesSeasons: Array.isArray(d.witnessesSeasons)
+                ? normalizeLoadedWitnesses(d.witnessesSeasons, isDonemselHaftalik)
+                : p.witnessesSeasons,
+            };
+          });
         }
-        if (raw.weeklyDays != null) setWeeklyDays(String(raw.weeklyDays));
-        if (raw.activeTab) setActiveTab(raw.activeTab === "tatilli" ? "tatilli" : "tatilsiz");
         if (raw.katSayi != null) setKatSayi(Number(raw.katSayi) || 1);
         if (raw.mode270) setMode270(raw.mode270);
         if (raw.mahsuplasmaMiktari != null) setMahsuplasmaMiktari(String(raw.mahsuplasmaMiktari || ""));
@@ -207,13 +233,12 @@ export default function DonemselPage() {
       summerPattern,
       winterPattern,
       witnesses: witnessesSeasons,
-      weeklyDays: workDays,
-      activeTab,
       katSayi,
       haftalikMode: isDonemselHaftalik,
     });
 
-    if (zamanasimiBaslangic) {
+    const afterZaman = (() => {
+      if (!zamanasimiBaslangic) return raw as FazlaMesaiRowBase[];
       const zDate = new Date(zamanasimiBaslangic);
       return raw
         .map((r) => {
@@ -236,28 +261,85 @@ export default function DonemselPage() {
           return r;
         })
         .filter(Boolean) as FazlaMesaiRowBase[];
-    }
-    return raw as FazlaMesaiRowBase[];
-  }, [donemselState, workDays, activeTab, katSayi, zamanasimiBaslangic, isDonemselHaftalik]);
+    })();
 
+    if (!exclusions.length) return afterZaman;
+
+    const davaciLeaveMeta = annualLeaveMetaFromSeasonalPattern(summerPattern, isDonemselHaftalik);
+    const davaciWeeklyOffFallback = weeklyIgnoredWeekdayFromSeasonalPattern(summerPattern, isDonemselHaftalik);
+    return expandTanikliStandartRowsAnnualLeaveV2(
+      afterZaman as Array<FazlaMesaiRowBase & { dailyNet?: number }>,
+      exclusions,
+      davaciLeaveMeta.annualLeaveHg,
+      davaciWeeklyOffFallback,
+      davaciLeaveMeta.annualLeaveSevenDay
+    );
+  }, [donemselState, katSayi, zamanasimiBaslangic, isDonemselHaftalik, exclusions]);
+
+  /** UBGT kataloğu: form beyanı değil, cetvel satırlarının (override sonrası) birleşik aralığı. */
+  const ubgtFmCatalogRange = useMemo(() => {
+    let start = "";
+    let end = "";
+    const consider = (r: FazlaMesaiRowBase) => {
+      const s = (r.startISO || "").slice(0, 10);
+      const e = (r.endISO || "").slice(0, 10);
+      if (!s || !e) return;
+      if (!start || s < start) start = s;
+      if (!end || e > end) end = e;
+    };
+    const merged = (r: FazlaMesaiRowBase) => ({ ...r, ...(rowOverrides[r.id] || {}) }) as FazlaMesaiRowBase;
+    rows.forEach((r) => consider(merged(r)));
+    manualRows.forEach((r) => consider(merged(r)));
+    if (!start || !end || start > end) return { start: "", end: "" };
+    return { start, end };
+  }, [rows, manualRows, rowOverrides]);
+
+  /** Tablo pipeline yedek FM: yaz deseni (özet). */
   const davaciWeeklyFM = useMemo(() => {
     const sp = donemselState.summerPattern;
     if (isDonemselHaftalik) {
       return calcFmHoursPerWeekHaftalik(sp);
     }
-    const [girH, girM] = sp.startTime.split(":").map(Number);
-    const [cikH, cikM] = sp.endTime.split(":").map(Number);
-    const dailyBrut = (cikH * 60 + (cikM || 0) - girH * 60 - (girM || 0)) / 60;
-    let breakH = 1;
-    if (dailyBrut >= 15) breakH = 3;
-    else if (dailyBrut >= 14) breakH = 2;
-    else if (dailyBrut >= 11) breakH = 1.5;
-    const dailyNet = Math.max(0, dailyBrut - breakH);
-    const total = workDays === 7 && activeTab === "tatilli"
-      ? 6 * dailyNet + Math.max(0, dailyNet - 7.5)
-      : dailyNet * workDays;
-    return Math.max(0, Math.round(total) - 45);
-  }, [donemselState.summerPattern, workDays, activeTab, isDonemselHaftalik]);
+    return calcFmHoursPerWeek(
+      sp,
+      workDaysFromPattern(sp),
+      sevenModeFromPattern(sp)
+    );
+  }, [donemselState.summerPattern, isDonemselHaftalik]);
+
+  const davaciWeeklyFMSummary = useMemo(() => {
+    if (isDonemselHaftalik) {
+      const yaz = calcFmHoursPerWeekHaftalik(donemselState.summerPattern);
+      const kis = calcFmHoursPerWeekHaftalik(donemselState.winterPattern);
+      return { yaz, kis };
+    }
+    const sp = donemselState.summerPattern;
+    const wp = donemselState.winterPattern;
+    return {
+      yaz: calcFmHoursPerWeek(sp, workDaysFromPattern(sp), sevenModeFromPattern(sp)),
+      kis: calcFmHoursPerWeek(wp, workDaysFromPattern(wp), sevenModeFromPattern(wp)),
+    };
+  }, [donemselState.summerPattern, donemselState.winterPattern, isDonemselHaftalik]);
+
+  const fmMetinCards = useMemo(
+    () =>
+      buildDonemselFmMetinCards({
+        variant: isDonemselHaftalik ? "haftalik" : "simple",
+        dateIn: donemselState.dateIn,
+        dateOut: donemselState.dateOut,
+        summerPattern: donemselState.summerPattern,
+        winterPattern: donemselState.winterPattern,
+        witnesses: donemselState.witnessesSeasons,
+      }),
+    [
+      isDonemselHaftalik,
+      donemselState.dateIn,
+      donemselState.dateOut,
+      donemselState.summerPattern,
+      donemselState.winterPattern,
+      donemselState.witnessesSeasons,
+    ]
+  );
 
   const computedDisplayRows = useMemo(() => {
     try {
@@ -273,30 +355,49 @@ export default function DonemselPage() {
         istenCikis: donemselState.dateOut,
         zamanasimiBaslangic,
         useRawWeeks: true,
+        skipAnnualLeaveExclusions: exclusions.length > 0,
       }) as FazlaMesaiRowBase[];
     } catch {
       return rows;
     }
   }, [rows, manualRows, rowOverrides, katSayi, davaciWeeklyFM, exclusions, mode270, donemselState.dateIn, donemselState.dateOut, zamanasimiBaslangic]);
 
-  const totalBrut = useMemo(
-    () => computedDisplayRows.reduce((a, r) => a + (r.fm ?? 0), 0),
-    [computedDisplayRows]
-  );
-  const totalNet = useMemo(
-    () => computedDisplayRows.reduce((a, r) => a + (r.net ?? 0), 0),
+  /**
+   * FM saati 0 olan otomatik satırlar cetvelde gösterilmez.
+   * Yeni eklenen manuel satır `fmHours: 0` ile gelir; filtreye takılırsa + hiç çalışmıyormuş gibi görünür — manuel satırlar her zaman listelenir.
+   */
+  const tableDisplayRows = useMemo(
+    () =>
+      (computedDisplayRows as Array<{ fmHours?: number; fm?: number; isManual?: boolean; manual?: boolean }>).filter(
+        (r) => Number(r.fmHours ?? 0) !== 0 || !!(r.isManual ?? r.manual)
+      ),
     [computedDisplayRows]
   );
 
+  const totalBrut = useMemo(
+    () => tableDisplayRows.reduce((a, r) => a + (r.fm ?? 0), 0),
+    [tableDisplayRows]
+  );
+
+  const exitYear = donemselState.dateOut
+    ? new Date(donemselState.dateOut).getFullYear()
+    : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const gelirVergisi = Math.round(totalBrut * 0.15 * 100) / 100;
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
-    return { gelirVergisi, damgaVergisi, netYillik, gelirVergisiDilimleri: "(%15)" };
-  }, [totalBrut]);
+    return {
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets,
+    };
+  }, [totalBrut, exitYear]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -323,8 +424,6 @@ export default function DonemselPage() {
       data: {
         form: {
           donemselState,
-          weeklyDays,
-          activeTab,
           katSayi,
           mode270,
           mahsuplasmaMiktari,
@@ -333,7 +432,7 @@ export default function DonemselPage() {
           manualRows,
           rowOverrides,
         },
-        formValues: { donemselState, weeklyDays, activeTab, katSayi, mode270, mahsuplasmaMiktari, zamanasimi },
+        formValues: { donemselState, katSayi, mode270, mahsuplasmaMiktari, zamanasimi },
         totals: { toplam: totalBrut },
         brut_total: totalBrut,
         net_total: brutNetResult.netYillik,
@@ -350,8 +449,6 @@ export default function DonemselPage() {
     RECORD_TYPE,
     REDIRECT_BASE_PATH,
     donemselState,
-    weeklyDays,
-    activeTab,
     katSayi,
     mode270,
     mahsuplasmaMiktari,
@@ -366,8 +463,24 @@ export default function DonemselPage() {
   ]);
 
   const handleNew = useCallback(() => {
-    if (effectiveId) navigate(REDIRECT_BASE_PATH);
-  }, [effectiveId, navigate, REDIRECT_BASE_PATH]);
+    setDonemselState(emptyDonemselState(location.pathname));
+    setKatSayi(1);
+    setMode270("none");
+    setMahsuplasmaMiktari("");
+    setZamanasimi(null);
+    setExclusions([]);
+    setCurrentRecordName(undefined);
+    setManualRows([]);
+    setRowOverrides({});
+    setZForm({ dava: "", bas: "", bit: "" });
+    setShowZamanaModal(false);
+    setShowKatsayiModal(false);
+    setShowMahsuplasamaModal(false);
+    setShow270Dropdown(false);
+    if (effectiveId) {
+      navigate(REDIRECT_BASE_PATH);
+    }
+  }, [effectiveId, navigate, REDIRECT_BASE_PATH, location.pathname]);
 
   const handleDavaciUpdate = useCallback(
     (updates: Partial<DonemselState>) => {
@@ -376,8 +489,63 @@ export default function DonemselPage() {
     []
   );
 
+  const addRow = useCallback(
+    (afterRowId?: string) => {
+      setManualRows((prev) => [
+        ...prev,
+        {
+          id: `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          startISO: "",
+          endISO: "",
+          rangeLabel: "",
+          weeks: 0,
+          originalWeekCount: 0,
+          brut: 0,
+          katsayi: katSayi || 1,
+          fmHours: 0,
+          fm: 0,
+          net: 0,
+          isManual: true,
+          insertAfter: afterRowId,
+        } as FazlaMesaiRowBase,
+      ]);
+    },
+    [katSayi]
+  );
+
+  const removeRow = useCallback(
+    (rowId: string) => {
+      const isManual = manualRows.some((r) => r.id === rowId);
+      if (isManual) {
+        setManualRows((prev) => prev.filter((r) => r.id !== rowId));
+        setRowOverrides((prev) => {
+          const next = { ...prev };
+          delete next[rowId];
+          return next;
+        });
+      } else {
+        setRowOverrides((prev) => ({ ...prev, [rowId]: { ...prev[rowId], hidden: true } }));
+      }
+    },
+    [manualRows]
+  );
+
+  const handleRowOverride = useCallback(
+    (rowId: string, updates: Partial<FazlaMesaiRowBase>) => {
+      setRowOverrides((prev) => {
+        const cur = prev[rowId] || {};
+        const next = { ...cur, ...updates } as Partial<FazlaMesaiRowBase>;
+        if (updates.startISO != null) {
+          const brut = getAsgariUcretByDate(updates.startISO);
+          if (brut != null) next.brut = brut;
+        }
+        return { ...prev, [rowId]: next };
+      });
+    },
+    []
+  );
+
   const videoLink = getVideoLink(isDonemselHaftalik ? "fazla-donemsel-haftalik" : "fazla-donemsel");
-  const isValid = Boolean(donemselState.dateIn && donemselState.dateOut);
 
   const wordTableSections = useMemo(() => {
     const s: Array<{ id: string; title: string; html: string }> = [];
@@ -387,18 +555,41 @@ export default function DonemselPage() {
     });
     s.push({ id: "ust", title: "Genel Bilgiler", html: buildWordTable(n1.headers, n1.rows) });
 
-    const cetvelHeaders = ["Tarih Aralığı", "Hafta", "Ücret", "Kat", "FM Saat", "Fazla Mesai"];
-    const cetvelRows = computedDisplayRows.map((r) => [
-      r.rangeLabel || "-",
-      String(r.weeks ?? 0),
-      fmt(r.brut ?? 0),
-      String(r.katsayi ?? 1),
-      String((r.fmHours ?? 0).toFixed(2)),
-      fmt(r.fm ?? 0),
-    ]);
-    cetvelRows.push(["", "", "", "", "Toplam", fmt(totalBrut)]);
+    const cetvelHeaders = ["Dönem", "Hafta", "Ücret", "Katsayı", "FM Saat", "225", "1,5", "Fazla Mesai"];
+    const cetvelRows = tableDisplayRows.map((r) => {
+      const periodLabel =
+        (r.startISO && r.endISO ? `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}` : r.rangeLabel) || "-";
+      const periodWithNote = r.yillikIzinAciklama ? `${periodLabel} ${r.yillikIzinAciklama}` : periodLabel;
+      return [
+        periodWithNote,
+        String(r.weeks ?? 0),
+        fmt(r.brut ?? 0),
+        String(r.katsayi ?? 1),
+        String((r.fmHours ?? 0).toFixed(2)),
+        "225",
+        "1,5",
+        fmt(r.fm ?? 0),
+      ];
+    });
+    cetvelRows.push(["", "", "", "", "", "", "Toplam", fmt(totalBrut)]);
     const n2 = adaptToWordTable({ headers: cetvelHeaders, rows: cetvelRows });
     s.push({ id: "cetvel", title: "Fazla Mesai Hesaplama Cetveli", html: buildWordTable(n2.headers, n2.rows) });
+
+    if (exclusions.length > 0) {
+      const yillikIzinHeaders = ["Tür", "Başlangıç", "Bitiş", "Gün"];
+      const yillikIzinRows = exclusions.map((ex) => [
+        ex.type || "Yıllık İzin",
+        formatDateTR(ex.start),
+        formatDateTR(ex.end),
+        String(ex.days ?? 0),
+      ]);
+      const nYillik = adaptToWordTable({ headers: yillikIzinHeaders, rows: yillikIzinRows });
+      s.push({
+        id: "yillikizin",
+        title: "Yıllık İzin Düşümü / Dışlanan Günler",
+        html: buildWordTable(nYillik.headers, nYillik.rows),
+      });
+    }
 
     const brutNetRows: { label: string; value: string }[] = [
       { label: "Brüt Fazla Mesai", value: fmtCurrency(totalBrut) },
@@ -424,16 +615,20 @@ export default function DonemselPage() {
   }, [
     donemselState.dateIn,
     donemselState.dateOut,
-    computedDisplayRows,
+    tableDisplayRows,
     totalBrut,
     brutNetResult,
     hakkaniyetIndirimi,
     mahsupNum,
     sonNet,
+    exclusions,
   ]);
 
   return (
-    <div className={`min-h-screen ${pageStyle.bg} ${pageStyle.text} transition-colors pb-20 sm:pb-6`} data-page={dataPageAttr}>
+    <div
+      className={`min-h-screen ${pageStyle.bg} ${pageStyle.text} transition-colors pb-28 sm:pb-28 lg:pb-36`}
+      data-page={dataPageAttr}
+    >
       <div className="max-w-2xl lg:max-w-5xl mx-auto px-2 sm:px-4 py-4 sm:py-6">
         {videoLink && (
           <div className="flex justify-end mb-4">
@@ -465,49 +660,20 @@ export default function DonemselPage() {
                 onDateOutChange={(v) => handleDavaciUpdate({ dateOut: v })}
               />
 
-              {!isDonemselHaftalik && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-                  <div>
-                    <label className={labelCls}>Haftada Çalışılan Gün</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={7}
-                      value={weeklyDays}
-                      onChange={(e) => setWeeklyDays(e.target.value)}
-                      className={inputCls}
-                    />
-                  </div>
-                  {workDays === 7 && (
-                    <div className="flex flex-col justify-end">
-                      <label className={labelCls}>Hafta Tatili</label>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("tatilsiz")}
-                          className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-sm rounded border ${activeTab === "tatilsiz" ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300" : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
-                        >
-                          Hafta Tatilsiz
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("tatilli")}
-                          className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-sm rounded border ${activeTab === "tatilli" ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300" : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
-                        >
-                          Hafta Tatilli
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
               {isDonemselHaftalik && (
                 <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                  Haftalık çalışma günü, her sezonda Grup 1 + Grup 2 gün toplamıdır. Toplam 7 gün olduğunda &quot;Hafta Tatili Var mı?&quot; ile hafta tatili fazla mesaisi seçilebilir (v1 ile aynı mantık).
+                  Haftalık çalışma günü, her sezonda Grup 1 + Grup 2 gün toplamıdır. Toplam 7 gün olduğunda klasik dönemseldeki gibi &quot;Hafta tatilsiz&quot; / &quot;Hafta tatilli&quot; ile hafta tatili fazla mesaisi seçilir.
                 </p>
               )}
-              <div className="mt-2 text-xs text-gray-500">
-                Örnek FM (Yaz desen, davacı): <strong>{davaciWeeklyFM.toFixed(2)}</strong> saat/hafta
+              <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Örnek FM (davacı): yaz <strong>{davaciWeeklyFMSummary.yaz.toFixed(2)}</strong> saat/hafta
+                {" · "}
+                kış <strong>{davaciWeeklyFMSummary.kis.toFixed(2)}</strong> saat/hafta
+                {!isDonemselHaftalik && (
+                  <span className="block mt-0.5 text-[11px] opacity-90">
+                    Haftalık gün ve hafta tatili seçimi her sezon kartında ayrıdır.
+                  </span>
+                )}
               </div>
             </section>
 
@@ -520,10 +686,45 @@ export default function DonemselPage() {
               />
             </section>
 
+            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
+              <details className="group" open>
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between list-none">
+                  <span>Metin Hesaplaması</span>
+                  <svg
+                    className="w-4 h-4 transition-transform group-open:rotate-180"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </summary>
+                <div className="p-4">
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                    Özet metinler yaz/kış desenine ve cetvelde kullanılan haftalık FM formülüne göredir; asgari ücret
+                    dönemleri ve tanık kesişimleri cetvel satırlarında ayrıca uygulanır.
+                  </p>
+                  <div className="bg-[#f1f3f5] dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {fmMetinCards.map((card) => (
+                        <div
+                          key={card.key}
+                          className="p-3 rounded-lg border bg-white dark:bg-gray-800 shadow-sm text-xs leading-snug whitespace-pre-line text-gray-800 dark:text-gray-200"
+                        >
+                          {card.text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </section>
+
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5">
               <h2 className={sectionTitleCls}>Ek Ayarlar</h2>
-              <div className="flex flex-nowrap items-center gap-1.5 sm:gap-2 mt-2 mb-4 overflow-x-auto">
-                <div className="relative shrink-0">
+              {/* 270 listesi absolute; overflow-x-auto üstte olursa menü kırpılır — bu blok kaydırmadan ayrı */}
+              <div className="mt-2 mb-4 flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <div className="relative z-30 shrink-0">
                   <button
                     type="button"
                     onClick={() => setShow270Dropdown(!show270Dropdown)}
@@ -537,7 +738,7 @@ export default function DonemselPage() {
                     </svg>
                   </button>
                   {show270Dropdown && (
-                    <div className="absolute top-full left-0 mt-1.5 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-20 py-1 text-xs">
+                    <div className="absolute top-full left-0 mt-1.5 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 py-1 text-xs">
                       <button type="button" onClick={() => { setMode270("none"); setShow270Dropdown(false); }} className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${mode270 === "none" ? "bg-gray-100 dark:bg-gray-700 font-medium" : ""}`}>Kapalı</button>
                       <button type="button" onClick={() => { setMode270("detailed"); setShow270Dropdown(false); }} className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${mode270 === "detailed" ? "bg-gray-100 dark:bg-gray-700 font-medium" : ""}`}>Şirket Uygulaması</button>
                       <button type="button" onClick={() => { setMode270("simple"); setShow270Dropdown(false); }} className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${mode270 === "simple" ? "bg-gray-100 dark:bg-gray-700 font-medium" : ""}`}>Yargıtay Uygulaması</button>
@@ -559,41 +760,216 @@ export default function DonemselPage() {
                   Kat Sayı: {katSayi}
                 </button>
               </div>
-              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} showToastError={showToastError} />
+              <div className="space-y-3">
+                <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} showToastError={showToastError} />
+                <UbgtFmDayPicker
+                  rangeStart={ubgtFmCatalogRange.start}
+                  rangeEnd={ubgtFmCatalogRange.end}
+                  exclusions={exclusions}
+                  setExclusions={setExclusions}
+                  showToastError={showToastError}
+                />
+              </div>
             </section>
 
-            <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-3 sm:p-5 overflow-x-auto">
-              <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Tablosu</h2>
-              <div className="min-w-[480px]">
-                <table className="w-full text-xs sm:text-sm border-collapse mt-2">
+            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
+                <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Cetveli</h2>
+              </div>
+              <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
+              <div className="overflow-x-auto">
+                <table
+                  className="w-full text-xs border-collapse font-sans table-fixed text-gray-900 dark:text-gray-100"
+                  style={{ minWidth: "640px" }}
+                >
+                  <colgroup>
+                    <col style={{ width: "30%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "6%" }} />
+                  </colgroup>
                   <thead>
-                    <tr className="border-b border-gray-200 dark:border-gray-600">
-                      <th className="text-left py-2 px-1.5 sm:px-2 whitespace-nowrap">Tarih Aralığı</th>
-                      <th className="text-right py-2 px-1.5 sm:px-2">Hafta</th>
-                      <th className="text-right py-2 px-1.5 sm:px-2">Ücret</th>
-                      <th className="text-right py-2 px-1.5 sm:px-2">Kat</th>
-                      <th className="text-right py-2 px-1.5 sm:px-2">FM Saat</th>
-                      <th className="text-right py-2 px-1.5 sm:px-2">Fazla Mesai</th>
+                    <tr className="bg-gray-100 dark:bg-gray-700">
+                      <th className="px-2 py-1.5 text-left border border-gray-200 dark:border-gray-600 font-semibold">
+                        Tarih Aralığı
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        Hafta
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        Ücret
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        Kat Sayı
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        FM Saati
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        225
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        1,5
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">
+                        Fazla Mesai
+                      </th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
                     </tr>
                   </thead>
                   <tbody>
-                    {computedDisplayRows.map((r) => (
-                      <tr key={r.id} className="border-b border-gray-100 dark:border-gray-700">
-                        <td className="py-1.5 px-1.5 sm:px-2 text-[11px] sm:text-sm max-w-[120px] sm:max-w-none truncate sm:whitespace-normal" title={r.rangeLabel || "-"}>{r.rangeLabel || "-"}</td>
-                        <td className="text-right py-1.5 px-1.5 sm:px-2">{r.weeks ?? 0}</td>
-                        <td className="text-right py-1.5 px-1.5 sm:px-2 whitespace-nowrap">{fmt(r.brut ?? 0)}</td>
-                        <td className="text-right py-1.5 px-1.5 sm:px-2">{r.katsayi ?? 1}</td>
-                        <td className="text-right py-1.5 px-1.5 sm:px-2">{(r.fmHours ?? 0).toFixed(2)}</td>
-                        <td className="text-right py-1.5 px-1.5 sm:px-2 whitespace-nowrap">{fmt(r.fm ?? 0)}</td>
+                    {computedDisplayRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={9}
+                          className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500"
+                        >
+                          Davacı için işe giriş ve işten çıkış tarihlerini girin; tanık dönemleri varsa onlar da hesaba katılır.
+                        </td>
                       </tr>
-                    ))}
+                    ) : tableDisplayRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={9}
+                          className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500"
+                        >
+                          FM saati 0 olan satırlar gösterilmez; görüntülenecek cetvel satırı yok.
+                        </td>
+                      </tr>
+                    ) : (
+                      tableDisplayRows.map((r, i) => (
+                        <tr className="group hover:bg-gray-50 dark:hover:bg-gray-700/50" key={r.id}>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600 align-top">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="date"
+                                value={r.startISO ?? ""}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  handleRowOverride(r.id, { startISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                              <span className="text-gray-400 shrink-0">–</span>
+                              <input
+                                type="date"
+                                value={r.endISO ?? ""}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  handleRowOverride(r.id, { endISO: raw ? clampToLastDayOfMonth(raw) : undefined });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                            </div>
+                            {r.yillikIzinAciklama ? (
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                {r.yillikIzinAciklama}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={r.weeks ?? 0}
+                              onChange={(e) =>
+                                handleRowOverride(r.id, {
+                                  weeks: Number.isNaN(parseInt(e.target.value, 10))
+                                    ? 0
+                                    : Math.max(0, parseInt(e.target.value, 10)),
+                                })
+                              }
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              value={r.brut ?? 0}
+                              onChange={(e) =>
+                                handleRowOverride(r.id, {
+                                  brut: Number.isNaN(parseFloat(e.target.value))
+                                    ? 0
+                                    : Math.max(0, parseFloat(e.target.value.replace(",", "."))),
+                                })
+                              }
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">
+                            {(r.katsayi ?? 1).toLocaleString("tr-TR", {
+                              minimumFractionDigits: 4,
+                              maximumFractionDigits: 4,
+                            })}
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={r.fmHours ?? 0}
+                              onChange={(e) =>
+                                handleRowOverride(r.id, {
+                                  fmHours: Number.isNaN(parseFloat(e.target.value.replace(",", ".")))
+                                    ? 0
+                                    : Math.max(0, parseFloat(e.target.value.replace(",", "."))),
+                                })
+                              }
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">
+                            225
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">
+                            1,5
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right font-medium whitespace-nowrap">
+                            {fmt(r.fm ?? 0)}
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 align-middle">
+                            <div className="flex items-center justify-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto">
+                              <button
+                                type="button"
+                                onClick={() => addRow(r.id)}
+                                className="w-6 h-6 rounded flex items-center justify-center text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/40 font-medium"
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeRow(r.id)}
+                                disabled={computedDisplayRows.length <= 1}
+                                className="w-6 h-6 rounded flex items-center justify-center text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 font-medium"
+                                title={computedDisplayRows.length <= 1 ? "En az 1 satır kalmalı" : "Satırı sil"}
+                              >
+                                −
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    {tableDisplayRows.length > 0 && (
+                      <tr className="bg-indigo-50 dark:bg-indigo-900/30 font-semibold">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600">
+                          Toplam Fazla Mesai:
+                        </td>
+                        <td colSpan={6} className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600 text-right whitespace-nowrap">
+                          {fmtCurrency(totalBrut)}
+                        </td>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
+                      </tr>
+                    )}
                   </tbody>
-                  <tfoot>
-                    <tr className="font-normal border-t-2 border-gray-200 dark:border-gray-600">
-                      <td colSpan={5} className="py-2 px-1.5 sm:px-2 text-right">Toplam</td>
-                      <td className="text-right py-2 px-1.5 sm:px-2">{fmt(totalBrut)}</td>
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
             </section>
@@ -701,7 +1077,7 @@ export default function DonemselPage() {
         open={showMahsuplasamaModal}
         onClose={() => setShowMahsuplasamaModal(false)}
         onSave={(total) => setMahsuplasmaMiktari(String(total.toFixed(2)))}
-        periodLabels={computedDisplayRows.map((r) => r.startISO || "").filter(Boolean)}
+        periodLabels={tableDisplayRows.map((r) => r.startISO || "").filter(Boolean)}
       />
     </div>
   );

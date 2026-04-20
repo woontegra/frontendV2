@@ -1,4 +1,5 @@
 /** Standart Fazla Mesai - yardımcı fonksiyonlar */
+import { ceilWeeklyWorkHoursToHalfHour } from "@/shared/utils/fazlaMesai/weeklyHoursRounding";
 import { STANDARD_DAILY_REFERENCE_HOURS } from "./constants";
 
 export function calculateDailyWorkHours(startTime: string, endTime: string): number {
@@ -41,6 +42,6 @@ export function calculateWeeklyFMSaat(
   } else if (n >= 1 && n <= 6) {
     weeklyHours = dailyNetHours * n;
   }
-  const rounded = Math.round(weeklyHours);
+  const rounded = ceilWeeklyWorkHoursToHalfHour(weeklyHours);
   return Math.max(0, rounded - weeklyLimit);
 }

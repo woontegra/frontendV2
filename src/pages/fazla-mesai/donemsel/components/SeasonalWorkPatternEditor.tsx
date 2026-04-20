@@ -1,10 +1,10 @@
 /**
  * Dönemsel Fazla Mesai — Davacı Yaz/Kış deseni
- * variant "simple": tek giriş/çıkış + sayfa üstünde haftalık gün
+ * variant "simple": tek giriş/çıkış + sezon başına haftalık gün ve (7 günde) tatilli/tatilsiz
  * variant "haftalik": v1 ile aynı — Grup1/Grup2 (önce gün sayısı), toplam 7 günde hafta tatili
  */
 import type { SeasonalPattern } from "../types";
-import { MONTHS } from "../types";
+import { MONTHS, SEASONAL_WEEKLY_HOLIDAY_GETDAY_OPTIONS } from "../types";
 
 interface Props {
   summerPattern: SeasonalPattern;
@@ -65,7 +65,7 @@ export default function SeasonalWorkPatternEditor({
         <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-3">{title}</h4>
         <div className="mb-3">
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Aylar</label>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="grid grid-cols-6 gap-1">
             {MONTHS.map((m) => {
               const sel = pattern.months.includes(m.value);
               const dis = (season === "summer" ? winterPattern : summerPattern).months.includes(m.value);
@@ -75,7 +75,7 @@ export default function SeasonalWorkPatternEditor({
                   type="button"
                   disabled={isReadOnly || dis}
                   onClick={() => toggleMonth(season, m.value)}
-                  className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                  className={`px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors ${
                     sel
                       ? season === "summer"
                         ? "bg-orange-500 text-white"
@@ -212,37 +212,98 @@ export default function SeasonalWorkPatternEditor({
           )}
 
           {sum === 7 && (
-            <div className="mt-2 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/80 dark:bg-blue-950/30">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id={`weeklyHoliday-${season}`}
-                  checked={pattern.hasWeeklyHoliday ?? false}
-                  onChange={(e) => update({ ...pattern, hasWeeklyHoliday: e.target.checked })}
-                  disabled={isReadOnly}
-                  className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <label htmlFor={`weeklyHoliday-${season}`} className="text-xs font-semibold text-gray-700 dark:text-gray-300 cursor-pointer">
-                  Hafta Tatili Var mı?
-                </label>
-              </div>
-              {pattern.hasWeeklyHoliday && (
-                <div className="mt-2 ml-6">
-                  <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Hangi Gruba Dahil?</label>
-                  <select
-                    value={pattern.weeklyHolidayRow ?? 2}
-                    onChange={(e) =>
-                      update({ ...pattern, weeklyHolidayRow: e.target.value === "1" ? 1 : 2 })
+            <>
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Hafta tatili</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => update({ ...pattern, hasWeeklyHoliday: false })}
+                    disabled={isReadOnly}
+                    className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-xs rounded border ${
+                      !(pattern.hasWeeklyHoliday ?? false)
+                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                        : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                  >
+                    Hafta tatilsiz
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      update({
+                        ...pattern,
+                        hasWeeklyHoliday: true,
+                        weeklyHolidayWeekday:
+                          pattern.weeklyHolidayWeekday != null &&
+                          pattern.weeklyHolidayWeekday >= 0 &&
+                          pattern.weeklyHolidayWeekday <= 6
+                            ? pattern.weeklyHolidayWeekday
+                            : 0,
+                      })
                     }
                     disabled={isReadOnly}
-                    className={inputCls}
+                    className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-xs rounded border ${
+                      pattern.hasWeeklyHoliday
+                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                        : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
                   >
-                    <option value={1}>Grup 1</option>
-                    <option value={2}>Grup 2</option>
-                  </select>
+                    Hafta tatilli
+                  </button>
+                </div>
+              </div>
+              {pattern.hasWeeklyHoliday && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Hangi Gruba Dahil?</label>
+                    <select
+                      value={pattern.weeklyHolidayRow ?? 2}
+                      onChange={(e) =>
+                        update({ ...pattern, weeklyHolidayRow: e.target.value === "1" ? 1 : 2 })
+                      }
+                      disabled={isReadOnly}
+                      className={inputCls}
+                    >
+                      <option value={1}>Grup 1</option>
+                      <option value={2}>Grup 2</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                      Hafta tatili hangi gün?
+                    </label>
+                    <select
+                      value={
+                        pattern.weeklyHolidayWeekday != null &&
+                        pattern.weeklyHolidayWeekday >= 0 &&
+                        pattern.weeklyHolidayWeekday <= 6
+                          ? String(pattern.weeklyHolidayWeekday)
+                          : "0"
+                      }
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(6, parseInt(e.target.value, 10)));
+                        update({
+                          ...pattern,
+                          weeklyHolidayWeekday: Number.isFinite(v) ? v : 0,
+                        });
+                      }}
+                      disabled={isReadOnly}
+                      className={inputCls}
+                    >
+                      {SEASONAL_WEEKLY_HOLIDAY_GETDAY_OPTIONS.map((o) => (
+                        <option key={o.value} value={String(o.value)}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                      Yıllık izin / UBGT takviminde bu takvim günü sayılmaz (0 Pazar … 6 Cumartesi).
+                    </p>
+                  </div>
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -307,34 +368,136 @@ export default function SeasonalWorkPatternEditor({
           />
         </div>
       </div>
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Haftada çalışılan gün</label>
+          <input
+            type="number"
+            min={1}
+            max={7}
+            value={pattern.workDays ?? 6}
+            onChange={(e) => {
+              const n = Math.max(1, Math.min(7, parseInt(e.target.value, 10) || 6));
+              update({
+                ...pattern,
+                workDays: n,
+                ...(n !== 7 ? { sevenDayMode: "tatilsiz" as const } : {}),
+              });
+            }}
+            disabled={isReadOnly}
+            className={inputCls}
+          />
+        </div>
+        {(pattern.workDays ?? 6) === 7 && (
+          <div className="flex flex-col justify-end">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Hafta tatili</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => update({ ...pattern, sevenDayMode: "tatilsiz" })}
+                disabled={isReadOnly}
+                className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-xs rounded border ${
+                  (pattern.sevenDayMode ?? "tatilsiz") === "tatilsiz"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                    : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                }`}
+              >
+                Hafta tatilsiz
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  update({
+                    ...pattern,
+                    sevenDayMode: "tatilli",
+                    weeklyHolidayWeekday:
+                      pattern.weeklyHolidayWeekday != null &&
+                      pattern.weeklyHolidayWeekday >= 0 &&
+                      pattern.weeklyHolidayWeekday <= 6
+                        ? pattern.weeklyHolidayWeekday
+                        : 0,
+                  })
+                }
+                disabled={isReadOnly}
+                className={`flex-1 min-w-0 sm:flex-none px-3 py-2 text-xs rounded border ${
+                  pattern.sevenDayMode === "tatilli"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                    : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                }`}
+              >
+                Hafta tatilli
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      {(pattern.workDays ?? 6) === 7 && pattern.sevenDayMode === "tatilli" && (
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+            Hafta tatili hangi gün?
+          </label>
+          <select
+            value={
+              pattern.weeklyHolidayWeekday != null &&
+              pattern.weeklyHolidayWeekday >= 0 &&
+              pattern.weeklyHolidayWeekday <= 6
+                ? String(pattern.weeklyHolidayWeekday)
+                : "0"
+            }
+            onChange={(e) => {
+              const v = Math.max(0, Math.min(6, parseInt(e.target.value, 10)));
+              update({
+                ...pattern,
+                weeklyHolidayWeekday: Number.isFinite(v) ? v : 0,
+              });
+            }}
+            disabled={isReadOnly}
+            className={inputCls}
+          >
+            {SEASONAL_WEEKLY_HOLIDAY_GETDAY_OPTIONS.map((o) => (
+              <option key={o.value} value={String(o.value)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+            0 Pazar, 1 Pazartesi, … 6 Cumartesi (takvim, JavaScript ile aynı).
+          </p>
+        </div>
+      )}
     </div>
   );
-
-  const totalMonths = summerPattern.months.length + winterPattern.months.length;
-  const warn = totalMonths < 12;
 
   return (
     <div className="space-y-4">
       <p className="text-xs text-gray-600 dark:text-gray-400">
-        Yaz ve kış aylarında farklı çalışma saatleri belirleyin. Her ay sadece bir sezonda olabilir.
+        Yaz ve kış için hangi aylarda hangi çalışma saatlerinin geçerli olduğunu seçin; her ay en fazla bir sezonda olabilir. Tüm yılı
+        kapsamanız gerekmez. Hiçbir sezonda seçilmeyen aylar hesaplamada <strong>kış</strong> deseniyle işlenir.
       </p>
       <div className="rounded-lg border border-blue-200 dark:border-blue-700 p-4 bg-blue-50/50 dark:bg-blue-900/20">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
+          <div className="min-w-0">
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">İşe Giriş Tarihi</label>
-            <input type="date" value={dateIn} onChange={(e) => onDateInChange(e.target.value)} disabled={isReadOnly} className={inputCls} />
+            <input
+              type="date"
+              value={dateIn}
+              onChange={(e) => onDateInChange(e.target.value)}
+              disabled={isReadOnly}
+              className={`${inputCls} min-w-[11rem] w-full max-w-full`}
+            />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">İşten Çıkış Tarihi</label>
-            <input type="date" value={dateOut} onChange={(e) => onDateOutChange(e.target.value)} disabled={isReadOnly} className={inputCls} />
+            <input
+              type="date"
+              value={dateOut}
+              onChange={(e) => onDateOutChange(e.target.value)}
+              disabled={isReadOnly}
+              className={`${inputCls} min-w-[11rem] w-full max-w-full`}
+            />
           </div>
         </div>
       </div>
-      {warn && (
-        <div className="rounded-lg border border-amber-200 dark:border-amber-700 p-3 text-xs text-amber-800 dark:text-amber-200 bg-amber-50/50 dark:bg-amber-900/20">
-          Tüm ayları seçmelisiniz. Şu an {12 - totalMonths} ay seçilmedi.
-        </div>
-      )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {variant === "haftalik" ? (
           <>

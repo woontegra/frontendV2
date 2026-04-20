@@ -1229,7 +1229,7 @@ export default function BakiyeUcretAlacagiPage() {
                   </p>
                 ) : monthRows.length > 0 ? (
                   <div className="mt-1 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-600">
-                    <table className="min-w-full text-xs border-collapse">
+                    <table className="min-w-full text-xs border-collapse text-gray-900 dark:text-gray-100">
                       <thead>
                         <tr className="text-left text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50">
                           <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold">

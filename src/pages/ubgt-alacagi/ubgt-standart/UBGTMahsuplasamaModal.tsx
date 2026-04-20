@@ -146,7 +146,7 @@ export default function UBGTMahsuplasamaModal({
             <>
               <div className="border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden">
                 <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-xs">
+                  <table className="w-full border-collapse text-xs text-gray-900 dark:text-gray-100">
                     <thead>
                       <tr className="bg-gray-50 dark:bg-gray-800">
                         <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-left font-semibold text-gray-700 dark:text-gray-300">

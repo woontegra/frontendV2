@@ -75,7 +75,7 @@ export function MahsuplasamaModal({ open, onClose, onSave, periodLabels }: Props
           {years.length === 0 ? (
             <p className="text-gray-500 text-center py-8 text-sm">Hesaplama tablosunda veri bulunamadı. Önce hesaplama yapın.</p>
           ) : (
-            <table className="w-full text-xs border-collapse">
+            <table className="w-full text-xs border-collapse text-gray-900 dark:text-gray-100">
               <thead>
                 <tr className="bg-gray-100 dark:bg-gray-700">
                   <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-left">Ay</th>

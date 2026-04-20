@@ -2,6 +2,7 @@
  * Dönemsel Fazla Mesai — Tanık Yaz/Kış deseni
  * variant "haftalik": Grup1/Grup2 + hafta tatili (v1 ile uyumlu)
  */
+import { useRef } from "react";
 import type { DonemselWitness, SeasonalPattern } from "../types";
 import {
   MONTHS,
@@ -53,24 +54,41 @@ export default function WitnessSeasonalEditor({
   variant = "simple",
 }: Props) {
   const haftalik = variant === "haftalik";
+  const witnessesRef = useRef(witnesses);
+  witnessesRef.current = witnesses;
 
   const add = () => {
-    const maxId = witnesses.reduce((m, w) => Math.max(m, w.id), 0);
-    onUpdate([...witnesses, createWitness(maxId + 1, haftalik)]);
+    const list = witnessesRef.current;
+    const maxId = list.reduce((m, w) => {
+      const id = typeof w.id === "number" && Number.isFinite(w.id) ? w.id : 0;
+      return Math.max(m, id);
+    }, 0);
+    onUpdate([...list, createWitness(maxId + 1, haftalik)]);
   };
 
   const remove = (idx: number) => {
-    if (witnesses.length <= 1) return;
-    onUpdate(witnesses.filter((_, i) => i !== idx));
+    const list = witnessesRef.current;
+    if (list.length <= 1) return;
+    onUpdate(list.filter((_, i) => i !== idx));
   };
 
-  const updateWitness = (idx: number, w: DonemselWitness) => {
-    onUpdate(witnesses.map((x, i) => (i === idx ? w : x)));
+  /** Güncel tanık satırı ile birleştir — onChange içindeki eski `w` closure yüzünden dateIn silinmesin. */
+  const mergeWitness = (idx: number, patch: Partial<DonemselWitness>) => {
+    const list = witnessesRef.current;
+    const cur = list[idx];
+    if (!cur) return;
+    onUpdate(list.map((x, i) => (i === idx ? { ...cur, ...patch } : x)));
+  };
+
+  const replaceWitnessRow = (idx: number, row: DonemselWitness) => {
+    const list = witnessesRef.current;
+    onUpdate(list.map((x, i) => (i === idx ? row : x)));
   };
 
   const toggleMonth = (idx: number, season: "summer" | "winter", month: number) => {
     if (isReadOnly) return;
-    const w = witnesses[idx];
+    const w = witnessesRef.current[idx];
+    if (!w) return;
     const pattern = season === "summer" ? w.summerPattern : w.winterPattern;
     const other = season === "summer" ? w.winterPattern : w.summerPattern;
     if (other.months.includes(month)) {
@@ -81,7 +99,7 @@ export default function WitnessSeasonalEditor({
     const next = pattern.months.includes(month)
       ? pattern.months.filter((m) => m !== month)
       : [...pattern.months, month].sort((a, b) => a - b);
-    updateWitness(idx, patchPattern(w, season, { months: next }));
+    replaceWitnessRow(idx, patchPattern(w, season, { months: next }));
   };
 
   const renderHaftalikSeason = (idx: number, w: DonemselWitness, season: "summer" | "winter") => {
@@ -91,7 +109,11 @@ export default function WitnessSeasonalEditor({
     const d1 = p.days1 ?? 0;
     const d2 = p.days2 ?? 0;
     const sum = d1 + d2;
-    const setP = (patch: Partial<SeasonalPattern>) => updateWitness(idx, patchPattern(w, season, patch));
+    const setP = (patch: Partial<SeasonalPattern>) => {
+      const base = witnessesRef.current[idx];
+      if (!base) return;
+      replaceWitnessRow(idx, patchPattern(base, season, patch));
+    };
 
     return (
       <div key={season} className="rounded-lg border border-gray-200 dark:border-gray-600 p-3 bg-white dark:bg-gray-800">
@@ -211,31 +233,6 @@ export default function WitnessSeasonalEditor({
             </div>
           </div>
           {sum > 7 && <p className="text-[11px] text-red-500">Toplam gün 7&apos;yi geçemez.</p>}
-          {sum === 7 && (
-            <div className="p-2 rounded border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-              <label className="flex items-center gap-2 text-[11px] font-medium">
-                <input
-                  type="checkbox"
-                  checked={p.hasWeeklyHoliday ?? false}
-                  onChange={(e) => setP({ hasWeeklyHoliday: e.target.checked })}
-                  disabled={isReadOnly}
-                  className="rounded"
-                />
-                Hafta Tatili Var mı?
-              </label>
-              {p.hasWeeklyHoliday && (
-                <select
-                  className={`${inputCls} mt-1`}
-                  value={p.weeklyHolidayRow ?? 2}
-                  onChange={(e) => setP({ weeklyHolidayRow: e.target.value === "1" ? 1 : 2 })}
-                  disabled={isReadOnly}
-                >
-                  <option value={1}>Grup 1</option>
-                  <option value={2}>Grup 2</option>
-                </select>
-              )}
-            </div>
-          )}
         </div>
       </div>
     );
@@ -243,20 +240,34 @@ export default function WitnessSeasonalEditor({
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-gray-600 dark:text-gray-400">Her tanık için yaz ve kış aylarında farklı çalışma saatleri belirleyin.</p>
+      <p className="text-xs text-gray-600 dark:text-gray-400">
+        {haftalik ? (
+          <>
+            Dönemsel haftalıkta her tanık için yaz/kış aylarında Grup 1 ve Grup 2 gün sayıları ile çalışma saatlerini girin. Hafta tatilli
+            / tatilsiz beyanı yalnızca davacı kutusundadır; tanığın gün toplamı davacının beyanı ile sınırlanır, hafta tatili FM’si davacı
+            seçimine göre hesaplanır. Tüm ayları seçmek zorunlu değildir; seçilmeyen aylar kış deseniyle hesaplanır.
+          </>
+        ) : (
+          <>
+            Her tanık için yaz ve kış aylarında ayrı çalışma saatleri ve klasik dönemselde haftalık çalışma günü belirleyin. Tüm ayları
+            seçmek zorunlu değildir; seçilmeyen aylar kış deseniyle hesaplanır. Bu kartta tarih ve saat alanları davacıya göre otomatik
+            değiştirilmez (beyanınız olduğu gibi kalır). Cetvel, özet metin ve FM hesabında davacı süresi ve kutusuna göre kırpma ile kesişim
+            uygulanır. Haftada 7 gün seçerseniz hafta tatilli / tatilsiz hesabı davacı kutusundaki seçime göre yapılır (tanık kartında ayrı
+            düğme yok).
+          </>
+        )}
+      </p>
       {witnesses.length === 0 && (
         <p className="text-center py-6 text-sm text-gray-500">Henüz tanık yok. &quot;Tanık Ekle&quot; ile ekleyin.</p>
       )}
       {witnesses.map((w, idx) => {
-        const totalMonths = w.summerPattern.months.length + w.winterPattern.months.length;
-        const warn = totalMonths < 12;
         return (
-          <div key={w.id} className="rounded-xl border-2 border-gray-200 dark:border-gray-600 p-4 bg-gray-50/50 dark:bg-gray-900/30">
+          <div key={`donemsel-tanik-${idx}-${w.id}`} className="rounded-xl border-2 border-gray-200 dark:border-gray-600 p-4 bg-gray-50/50 dark:bg-gray-900/30">
             <div className="flex items-center justify-between gap-2 mb-4 min-w-0">
               <input
                 type="text"
                 value={w.name || `Tanık ${idx + 1}`}
-                onChange={(e) => updateWitness(idx, { ...w, name: e.target.value })}
+                onChange={(e) => mergeWitness(idx, { name: e.target.value })}
                 disabled={isReadOnly}
                 className="min-w-0 flex-1 text-sm font-semibold bg-transparent border-b-2 border-transparent focus:border-indigo-500 focus:outline-none px-2 py-1"
               />
@@ -267,20 +278,27 @@ export default function WitnessSeasonalEditor({
               )}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 rounded-lg border border-blue-200 dark:border-blue-700 p-3 bg-blue-50/50 dark:bg-blue-900/20">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-xs font-medium mb-1">İşe Giriş</label>
-                <input type="date" value={w.dateIn} onChange={(e) => updateWitness(idx, { ...w, dateIn: e.target.value })} disabled={isReadOnly} className={inputCls} />
+                <input
+                  type="date"
+                  value={w.dateIn}
+                  onChange={(e) => mergeWitness(idx, { dateIn: e.target.value })}
+                  disabled={isReadOnly}
+                  className={`${inputCls} min-w-[11rem] w-full max-w-full`}
+                />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-xs font-medium mb-1">İşten Çıkış</label>
-                <input type="date" value={w.dateOut} onChange={(e) => updateWitness(idx, { ...w, dateOut: e.target.value })} disabled={isReadOnly} className={inputCls} />
+                <input
+                  type="date"
+                  value={w.dateOut}
+                  onChange={(e) => mergeWitness(idx, { dateOut: e.target.value })}
+                  disabled={isReadOnly}
+                  className={`${inputCls} min-w-[11rem] w-full max-w-full`}
+                />
               </div>
             </div>
-            {warn && (
-              <div className="mb-3 text-xs text-amber-600 dark:text-amber-400">
-                Tüm ayları seçin. {12 - totalMonths} ay eksik.
-              </div>
-            )}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {haftalik ? (
                 <>
@@ -318,7 +336,11 @@ export default function WitnessSeasonalEditor({
                           <input
                             type="time"
                             value={p.startTime}
-                            onChange={(e) => updateWitness(idx, patchPattern(w, season, { startTime: e.target.value }))}
+                            onChange={(e) => {
+                              const base = witnessesRef.current[idx];
+                              if (!base) return;
+                              replaceWitnessRow(idx, patchPattern(base, season, { startTime: e.target.value }));
+                            }}
                             disabled={isReadOnly}
                             className={inputCls}
                           />
@@ -328,11 +350,32 @@ export default function WitnessSeasonalEditor({
                           <input
                             type="time"
                             value={p.endTime}
-                            onChange={(e) => updateWitness(idx, patchPattern(w, season, { endTime: e.target.value }))}
+                            onChange={(e) => {
+                              const base = witnessesRef.current[idx];
+                              if (!base) return;
+                              replaceWitnessRow(idx, patchPattern(base, season, { endTime: e.target.value }));
+                            }}
                             disabled={isReadOnly}
                             className={inputCls}
                           />
                         </div>
+                      </div>
+                      <div className="mt-2">
+                        <label className="block text-xs mb-0.5">Haftada çalışılan gün</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={7}
+                          value={p.workDays ?? 6}
+                          onChange={(e) => {
+                            const n = Math.max(1, Math.min(7, parseInt(e.target.value, 10) || 6));
+                            const base = witnessesRef.current[idx];
+                            if (!base) return;
+                            replaceWitnessRow(idx, patchPattern(base, season, { workDays: n }));
+                          }}
+                          disabled={isReadOnly}
+                          className={inputCls}
+                        />
                       </div>
                     </div>
                   );

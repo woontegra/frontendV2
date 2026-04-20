@@ -24,7 +24,9 @@ import {
   type FazlaMesaiRowBase,
 } from "@modules/fazla-mesai/shared";
 import { YillikIzinPanel } from "./YillikIzinPanel";
+import { UbgtFmDayPicker } from "./UbgtFmDayPicker";
 import { ZamanasimiModal } from "./ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "./ZamanasimiCetvelBanner";
 import { KatsayiModal } from "./KatsayiModal";
 import { MahsuplasamaModal } from "./MahsuplasamaModal";
 import { NotlarAccordion } from "./NotlarAccordion";
@@ -32,10 +34,13 @@ import { Copy } from "lucide-react";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { calculateDailyWorkHours, computeBreakHours, calculateWeeklyFMSaat } from "./utils";
+import { expandStandartRowsForSixDayAnnualLeave } from "./annualLeaveSixDayRowSplit";
+import { expandTanikliStandartRowsAnnualLeaveV2 } from "../tanikli-standart/tanikliStandartAnnualLeaveV2";
 import { STANDARD_DAILY_REFERENCE_HOURS } from "./constants";
 import { useStandartFazlaMesaiState } from "./state";
 import { fmt, fmtCurrency } from "./calculations";
 import { WEEKLY_WORK_LIMIT, FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI } from "./constants";
+import { ceilWeeklyWorkHoursToHalfHour } from "@/shared/utils/fazlaMesai/weeklyHoursRounding";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
@@ -60,6 +65,23 @@ function formatDateTR(iso: string | undefined): string {
   const [y, m, d] = s.split("-");
   if (!d || !m || !y) return s;
   return `${d.padStart(2, "0")}.${m.padStart(2, "0")}.${y}`;
+}
+
+/**
+ * Standart FM cetvelinde tam takvim yılı satırları 52 hafta kabul edilir.
+ * (01.01.YYYY – 31.12.YYYY aralıklarında ham fonksiyon bazı yıllarda 53 döndürebiliyor.)
+ */
+function normalizeWeeksForStandard(startISO: string, endISO: string, rawWeeks: number): number {
+  const s = (startISO || "").slice(0, 10);
+  const e = (endISO || "").slice(0, 10);
+  if (!s || !e) return rawWeeks;
+  const sy = s.slice(0, 4);
+  const ey = e.slice(0, 4);
+  if (sy === ey && s.slice(5) === "01-01" && e.slice(5) === "12-31") return 52;
+  // Standart FM'de asgari ücretten gelen 6 aylık parçalar sabit 26 hafta kabul edilir.
+  if (sy === ey && s.slice(5) === "01-01" && e.slice(5) === "06-30") return 26;
+  if (sy === ey && s.slice(5) === "07-01" && e.slice(5) === "12-31") return 26;
+  return rawWeeks;
 }
 
 export default function StandartFazlaMesaiPage() {
@@ -97,7 +119,7 @@ export default function StandartFazlaMesaiPage() {
   const [localIstenCikis, setLocalIstenCikis] = useState("");
   const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { iseGiris, istenCikis, weeklyDays, davaci, mode270, katSayi, mahsuplasmaMiktari } = formValues;
+  const { iseGiris, istenCikis, weeklyDays, haftaTatiliGunu, davaci, mode270, katSayi, mahsuplasmaMiktari } = formValues;
 
   useEffect(() => {
     setLocalIseGiris(iseGiris || "");
@@ -125,6 +147,7 @@ export default function StandartFazlaMesaiPage() {
           ...(raw.iseGiris != null && { iseGiris: raw.iseGiris }),
           ...(raw.istenCikis != null && { istenCikis: raw.istenCikis }),
           ...(raw.weeklyDays != null && { weeklyDays: String(raw.weeklyDays) }),
+          ...(raw.haftaTatiliGunu != null && { haftaTatiliGunu: raw.haftaTatiliGunu === "" ? "" : Number(raw.haftaTatiliGunu) }),
           ...(raw.davaci && { davaci: { ...p.davaci, ...raw.davaci } }),
           ...(raw.mode270 && { mode270: raw.mode270 }),
           ...(raw.katSayi != null && { katSayi: raw.katSayi }),
@@ -179,19 +202,19 @@ export default function StandartFazlaMesaiPage() {
     const fmtH = (n: number) => n.toFixed(2).replace(".", ",");
     if (hg === 7) {
       const tatilsizWeekly = netGunluk * 7;
-      const roundedTatilsiz = Math.round(tatilsizWeekly);
+      const roundedTatilsiz = ceilWeeklyWorkHoursToHalfHour(tatilsizWeekly);
       const fmTatilsiz = Math.max(0, roundedTatilsiz - WEEKLY_WORK_LIMIT);
       const txtTatilsiz =
         `${inT}–${outT} = ${fmtH(brut)} saat çalışma\n` +
         `- ${fmtH(brk)} saat ara dinlenme = ${fmtH(netGunluk)} saat günlük çalışma\n` +
         `7 x ${fmtH(netGunluk)} = ${fmtH(tatilsizWeekly)} saat çalışma\n` +
-        `Net haftalık çalışma = ${roundedTatilsiz} saat,\n` +
-        `${roundedTatilsiz} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fmTatilsiz} saat haftalık fazla mesai`;
+        `Net haftalık çalışma = ${fmtH(roundedTatilsiz)} saat,\n` +
+        `${fmtH(roundedTatilsiz)} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fmtH(fmTatilsiz)} saat haftalık fazla mesai`;
 
       const weeklyWork = netGunluk * 6;
       const extraHT = Math.max(0, netGunluk - STANDARD_DAILY_REFERENCE_HOURS);
       const toplamCalisma = weeklyWork + extraHT;
-      const roundedTatilli = Math.round(toplamCalisma);
+      const roundedTatilli = ceilWeeklyWorkHoursToHalfHour(toplamCalisma);
       const fmTatilli = Math.max(0, roundedTatilli - WEEKLY_WORK_LIMIT);
       const txtTatilli =
         `${inT}–${outT} = ${fmtH(brut)} saat çalışma\n` +
@@ -199,19 +222,19 @@ export default function StandartFazlaMesaiPage() {
         `6 x ${fmtH(netGunluk)} = ${fmtH(weeklyWork)} saat çalışma\n` +
         `${fmtH(netGunluk)} - 7,5 = ${fmtH(extraHT)} saat hafta tatili fazla çalışma mesaisi\n` +
         `= ${fmtH(toplamCalisma)} saat çalışma\n` +
-        `Net haftalık çalışma = ${roundedTatilli} saat,\n` +
-        `${roundedTatilli} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fmTatilli} saat haftalık fazla mesai`;
+        `Net haftalık çalışma = ${fmtH(roundedTatilli)} saat,\n` +
+        `${fmtH(roundedTatilli)} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fmtH(fmTatilli)} saat haftalık fazla mesai`;
 
       return activeTab === "tatilsiz" ? txtTatilsiz : txtTatilli;
     }
     const haftalik = netGunluk * hg;
-    const roundedWeekly = Math.round(haftalik);
+    const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(haftalik);
     const fm = Math.max(0, roundedWeekly - WEEKLY_WORK_LIMIT);
     return `${inT}–${outT} = ${fmtH(brut)} saat çalışma\n` +
       `- ${fmtH(brk)} saat ara dinlenme = ${fmtH(netGunluk)} saat günlük çalışma\n` +
       `${hg} x ${fmtH(netGunluk)} = ${fmtH(haftalik)} saat\n` +
-      `Net haftalık çalışma = ${roundedWeekly} saat,\n` +
-      `${roundedWeekly} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fm} saat haftalık fazla mesai`;
+      `Net haftalık çalışma = ${fmtH(roundedWeekly)} saat,\n` +
+      `${fmtH(roundedWeekly)} – ${WEEKLY_WORK_LIMIT} saat yasal haftalık çalışma = ${fmtH(fm)} saat haftalık fazla mesai`;
   }, [davaci?.in, davaci?.out, dailyWorkingHours, weeklyDays, activeTab]);
 
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
@@ -236,11 +259,17 @@ export default function StandartFazlaMesaiPage() {
         }
       }
 
-      const weeks = calculateWeeksBetweenDates(seg.start, seg.end) || 1;
+      const weeks = normalizeWeeksForStandard(
+        seg.start,
+        seg.end,
+        calculateWeeksBetweenDates(seg.start, seg.end) || 1
+      );
       const brut = getAsgariUcretByDate(seg.start) || 0;
       const kats = katSayi || 1;
       const hoursEffective = weeks * weeklyFMSaat;
-      const fm = Number(((brut * kats * hoursEffective) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2);
+      const fm = Number(
+        (((brut * kats * hoursEffective) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2)
+      );
       const net = Number((fm * (1 - DAMGA_VERGISI_ORANI - 0.15)).toFixed(2));
 
       tableRows.push({
@@ -253,6 +282,7 @@ export default function StandartFazlaMesaiPage() {
         brut,
         katsayi: kats,
         fmHours: weeklyFMSaat,
+        dailyNet: dailyWorkingHours,
         fm,
         net,
         wage: brut,
@@ -260,21 +290,115 @@ export default function StandartFazlaMesaiPage() {
       });
     });
 
+      const useFiveDayAnnualLeaveSplit =
+        Number(weeklyDays) === 5 &&
+        exclusions.length > 0 &&
+        dailyWorkingHours > 0;
+      const useSixDayAnnualLeaveSplit =
+        Number(weeklyDays) === 6 &&
+        exclusions.length > 0 &&
+        dailyWorkingHours > 0;
+      const useSevenDayAnnualLeaveSplit =
+        Number(weeklyDays) === 7 &&
+        exclusions.length > 0 &&
+        dailyWorkingHours > 0;
+      const weeklyOffDayNum =
+        haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
+      const weeklyOffDay = Number.isInteger(weeklyOffDayNum) ? weeklyOffDayNum : null;
+
+      if (useSixDayAnnualLeaveSplit) {
+        return expandStandartRowsForSixDayAnnualLeave(
+          tableRows as FazlaMesaiRowBase[],
+          exclusions,
+          dailyWorkingHours,
+          weeklyFMSaat,
+          weeklyOffDay
+        );
+      }
+      if (useSevenDayAnnualLeaveSplit) {
+        return expandTanikliStandartRowsAnnualLeaveV2(
+          tableRows as Array<FazlaMesaiRowBase & { dailyNet?: number }>,
+          exclusions,
+          7,
+          weeklyOffDay,
+          activeTab
+        );
+      }
+      if (useFiveDayAnnualLeaveSplit) {
+        return expandTanikliStandartRowsAnnualLeaveV2(
+          tableRows as Array<FazlaMesaiRowBase & { dailyNet?: number }>,
+          exclusions,
+          5,
+          weeklyOffDay,
+          "tatilsiz"
+        );
+      }
+
       return tableRows;
     } catch {
       return [];
     }
-  }, [iseGiris, istenCikis, davaci?.in, davaci?.out, weeklyFMSaat, katSayi, zamanasimiBaslangic]);
+  }, [
+    iseGiris,
+    istenCikis,
+    davaci?.in,
+    davaci?.out,
+    weeklyFMSaat,
+    katSayi,
+    zamanasimiBaslangic,
+    exclusions,
+    haftaTatiliGunu,
+    weeklyDays,
+    dailyWorkingHours,
+    activeTab,
+  ]);
+
+  /** UBGT kataloğu: tablo satırlarının kapsadığı gerçek tarih aralığı. */
+  const ubgtFmCatalogRange = useMemo(() => {
+    let start = "";
+    let end = "";
+    const consider = (r: FazlaMesaiRowBase) => {
+      const s = (r.startISO || "").slice(0, 10);
+      const e = (r.endISO || "").slice(0, 10);
+      if (!s || !e) return;
+      if (!start || s < start) start = s;
+      if (!end || e > end) end = e;
+    };
+    (rows as FazlaMesaiRowBase[]).forEach(consider);
+    (manualRows as FazlaMesaiRowBase[]).forEach(consider);
+    if (!start || !end || start > end) return { start: "", end: "" };
+    return { start, end };
+  }, [rows, manualRows]);
+
+  const effectiveRowOverrides = useMemo(() => {
+    const out: Record<string, Partial<FazlaMesaiRowBase>> = {
+      ...(rowOverrides as Record<string, Partial<FazlaMesaiRowBase>>),
+    };
+    const byId = new Map((rows as FazlaMesaiRowBase[]).map((r) => [r.id, r] as const));
+    for (const [id, ov] of Object.entries(out)) {
+      const base = byId.get(id);
+      if (!base || ov.weeks == null) continue;
+      out[id] = {
+        ...ov,
+        weeks: normalizeWeeksForStandard(base.startISO || "", base.endISO || "", Number(ov.weeks)),
+      };
+    }
+    return out;
+  }, [rowOverrides, rows]);
 
   const computedDisplayRows = useMemo(() => {
     try {
       return computeDisplayRows({
         rows: rows as FazlaMesaiRowBase[],
         manualRows: manualRows as FazlaMesaiRowBase[],
-        rowOverrides: rowOverrides as Record<string, Partial<FazlaMesaiRowBase>>,
+        rowOverrides: effectiveRowOverrides,
         katSayi: katSayi || 1,
         weeklyFMSaat,
         exclusions,
+        skipAnnualLeaveExclusions:
+          (Number(weeklyDays) === 5 || Number(weeklyDays) === 6 || Number(weeklyDays) === 7) &&
+          exclusions.length > 0 &&
+          dailyWorkingHours > 0,
         mode270,
         iseGiris,
         istenCikis,
@@ -284,7 +408,20 @@ export default function StandartFazlaMesaiPage() {
     } catch {
       return rows;
     }
-  }, [rows, manualRows, rowOverrides, katSayi, weeklyFMSaat, exclusions, mode270, iseGiris, istenCikis, zamanasimiBaslangic]);
+  }, [
+    rows,
+    manualRows,
+    effectiveRowOverrides,
+    katSayi,
+    weeklyFMSaat,
+    exclusions,
+    weeklyDays,
+    dailyWorkingHours,
+    mode270,
+    iseGiris,
+    istenCikis,
+    zamanasimiBaslangic,
+  ]);
 
   const totalBrut = useMemo(
     () => computedDisplayRows.reduce((a, r) => a + (r.fm ?? 0), 0),
@@ -405,6 +542,7 @@ export default function StandartFazlaMesaiPage() {
         brut_total: totalBrut,
         net_total: brutNetResult.netYillik,
         exclusions,
+        rowOverrides: effectiveRowOverrides,
         mode270,
         katSayi,
         mahsuplasmaMiktari,
@@ -419,6 +557,7 @@ export default function StandartFazlaMesaiPage() {
     brutNetResult.netYillik,
     diff,
     exclusions,
+    effectiveRowOverrides,
     mode270,
     katSayi,
     mahsuplasmaMiktari,
@@ -446,8 +585,12 @@ export default function StandartFazlaMesaiPage() {
     });
 
     const cetvelHeaders = ["Dönem", "Hafta", "Ücret", "Katsayı", "FM Saat", "225", "1,5", "Fazla Mesai"];
-    const cetvelRows = computedDisplayRows.map((r: any) => [
-      (r.startISO && r.endISO ? `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}` : r.rangeLabel) || "-",
+    const cetvelRows = computedDisplayRows.map((r: any) => {
+      const periodLabel =
+        (r.startISO && r.endISO ? `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}` : r.rangeLabel) || "-";
+      const periodWithNote = r.yillikIzinAciklama ? `${periodLabel} ${r.yillikIzinAciklama}` : periodLabel;
+      return [
+      periodWithNote,
       r.weeks ?? 0,
       fmt(r.brut ?? 0),
       r.katsayi ?? 1,
@@ -455,7 +598,8 @@ export default function StandartFazlaMesaiPage() {
       "225",
       "1,5",
       fmt(r.fm ?? 0),
-    ]);
+    ];
+    });
     cetvelRows.push(["", "", "", "", "", "", "Toplam", fmt(totalBrut)]);
     const n2 = adaptToWordTable({ headers: cetvelHeaders, rows: cetvelRows });
     s.push({
@@ -498,11 +642,11 @@ export default function StandartFazlaMesaiPage() {
       htmlForPdf: buildStyledReportTable(n3.headers, n3.rows, { lastRowBg: "green" }),
     });
 
-    if (mahsupNum > 0) {
+    {
       const mahsupRows: { label: string; value: string }[] = [
         { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
-        { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
+        ...(mahsupNum > 0 ? [{ label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` }] : []),
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
       ];
       const n4 = adaptToWordTable(mahsupRows);
@@ -642,6 +786,27 @@ export default function StandartFazlaMesaiPage() {
                   className={inputCls}
                 />
               </div>
+              <div className="sm:col-start-3">
+                <label className={labelCls}>Hafta Tatili Günü (opsiyonel)</label>
+                <select
+                  value={haftaTatiliGunu === "" || haftaTatiliGunu == null ? "" : String(haftaTatiliGunu)}
+                  onChange={(e) =>
+                    handleFormChange({
+                      haftaTatiliGunu: e.target.value === "" ? "" : Number(e.target.value),
+                    })
+                  }
+                  className={inputCls}
+                >
+                  <option value="">Seçilmedi (tüm günlerde düşüm)</option>
+                  <option value="1">Pazartesi</option>
+                  <option value="2">Salı</option>
+                  <option value="3">Çarşamba</option>
+                  <option value="4">Perşembe</option>
+                  <option value="5">Cuma</option>
+                  <option value="6">Cumartesi</option>
+                  <option value="0">Pazar</option>
+                </select>
+              </div>
             </div>
             <div className="mt-2 text-xs text-gray-500">
               Haftalık FM Saati: <strong>{weeklyFMSaat.toFixed(2)}</strong> (Günlük net {dailyWorkingHours.toFixed(2)} saat)
@@ -681,7 +846,16 @@ export default function StandartFazlaMesaiPage() {
             </details>
           </section>
 
-          <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+          <div className="space-y-3">
+            <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+            <UbgtFmDayPicker
+              rangeStart={ubgtFmCatalogRange.start}
+              rangeEnd={ubgtFmCatalogRange.end}
+              exclusions={exclusions}
+              setExclusions={setExclusions}
+              showToastError={showToastError}
+            />
+          </div>
 
           <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
@@ -733,8 +907,9 @@ export default function StandartFazlaMesaiPage() {
             <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
               <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Cetveli</h2>
             </div>
+            <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse font-sans table-fixed" style={{ minWidth: "640px" }}>
+              <table className="w-full text-xs border-collapse font-sans table-fixed text-gray-900 dark:text-gray-100" style={{ minWidth: "640px" }}>
                 <colgroup>
                   <col style={{ width: "30%" }} />
                   <col style={{ width: "6%" }} />
@@ -809,6 +984,11 @@ export default function StandartFazlaMesaiPage() {
                                 title="Bitiş tarihi"
                               />
                             </div>
+                            {r.yillikIzinAciklama ? (
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                {r.yillikIzinAciklama}
+                              </div>
+                            ) : null}
                           </td>
                           <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
                             <input

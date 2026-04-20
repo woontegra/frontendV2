@@ -1199,7 +1199,7 @@ export default function UbgtStandartPage() {
               {ubgtRows.length > 0 ? (
                 <div className="w-full overflow-x-auto">
                   <table
-                    className="w-full border-collapse text-xs"
+                    className="w-full border-collapse text-xs text-gray-900 dark:text-gray-100"
                     style={{ border: "1px solid #d2d2d2" }}
                   >
                     <thead>

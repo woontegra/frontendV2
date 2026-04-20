@@ -10,6 +10,8 @@ function createWitness(): FormValues["taniklar"][0] {
     dateOut: "",
     in: "",
     out: "",
+    weeklyDays: "",
+    sevenDayMode: "tatilsiz",
   };
 }
 
@@ -17,6 +19,7 @@ const initialForm: FormValues = {
   iseGiris: "",
   istenCikis: "",
   weeklyDays: "6",
+  haftaTatiliGunu: "",
   davaci: { dateIn: "", dateOut: "", in: "", out: "" },
   taniklar: [createWitness()],
   mode270: "none",

@@ -447,7 +447,6 @@ export function generateDynamicIntervalsFromWitnesses(davaci: any, witnesses: an
   }
 
   debug('🎯 generateDynamicIntervalsFromWitnesses input:', { davaci, witnesses });
-  const out: Array<{ start: Date; end: Date; in?: string; out?: string }> = [];
   const dStart = toDate(davaci.startDate);
   const dEnd = toDate(davaci.endDate);
   if (!dStart || !dEnd) return [] as any[];
@@ -462,6 +461,8 @@ export function generateDynamicIntervalsFromWitnesses(davaci: any, witnesses: an
     .filter((x): x is { startDate: Date; endDate: Date; in: string; out: string } => 
       x.startDate !== null && x.endDate !== null && !Number.isNaN(x.startDate.getTime()) && !Number.isNaN(x.endDate.getTime()))
     .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+
+  const out: Array<{ start: Date; end: Date; in?: string; out?: string }> = [];
 
   for (const w of raw) {
     const s = maxDate(w.startDate, dStart);

@@ -3,6 +3,11 @@
  * Tüm saf hesaplama fonksiyonları ve sabitler bu dosyada.
  */
 
+import type { ExcludedDay } from "@/utils/exclusionStorage";
+import {
+  countAnnualLeaveCalendarDaysInWindow,
+  ubgExtraBalanceDaysInWindow,
+} from "@/shared/utils/fazlaMesai/annualLeaveCalendarDays";
 import { nationalDays } from "./data/national-days";
 import { officialHolidays } from "./data/official-holidays";
 import { generalHolidays } from "./data/general-holidays";
@@ -133,37 +138,50 @@ function createSeasonalDateRange(
   }
 }
 
+/** `YYYY-MM-DD` → yerel takvim günü (UTC `new Date("YYYY-MM-DD")` kayması olmadan). */
+export function parseIsoDateLocal(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "").trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
 export function getExcludedDaysInPeriod(
   periodStart: string,
   periodEnd: string,
-  excludedDays: Array<{ start: string; end: string; days: number }> = []
+  excludedDays: Array<{ start: string; end: string; days: number }> = [],
+  ignoredWeekday?: number | null
 ): number {
   if (excludedDays.length === 0) return 0;
-  const ps = new Date(periodStart);
-  const pe = new Date(periodEnd);
-  let total = 0;
-  excludedDays.forEach((ex) => {
-    const es = new Date(ex.start);
-    const ee = new Date(ex.end);
-    if (ee >= ps && es <= pe) {
-      const os = es > ps ? es : ps;
-      const oe = ee < pe ? ee : pe;
-      const days = Math.max(0, Math.floor((oe.getTime() - os.getTime()) / 86400000) + 1);
-      total += ex.days > 0 ? ex.days : days;
-    }
-  });
-  return total;
+  const ps = parseIsoDateLocal(periodStart);
+  const pe = parseIsoDateLocal(periodEnd);
+  if (!ps || !pe) return 0;
+  const calendar = countAnnualLeaveCalendarDaysInWindow(
+    ps,
+    pe,
+    excludedDays as ExcludedDay[],
+    ignoredWeekday ?? null
+  );
+  const ubgExtra = ubgExtraBalanceDaysInWindow(ps, pe, excludedDays as ExcludedDay[]);
+  return calendar + ubgExtra;
 }
 
 export function calculateWeekCount(
   periodStart: string,
   periodEnd: string,
-  excludedDays: Array<{ start: string; end: string; days: number }> = []
+  excludedDays: Array<{ start: string; end: string; days: number }> = [],
+  ignoredWeekday?: number | null
 ): number {
-  const s = new Date(periodStart);
-  const e = new Date(periodEnd);
+  const s = parseIsoDateLocal(periodStart);
+  const e = parseIsoDateLocal(periodEnd);
+  if (!s || !e) return 0;
   const totalDays = Math.ceil((e.getTime() - s.getTime()) / 86400000) + 1;
-  const excluded = getExcludedDaysInPeriod(periodStart, periodEnd, excludedDays);
+  const excluded = getExcludedDaysInPeriod(periodStart, periodEnd, excludedDays, ignoredWeekday ?? null);
   return Math.round(Math.max(0, totalDays - excluded) / 7);
 }
 

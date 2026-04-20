@@ -1246,7 +1246,7 @@ export default function UbgtBilirkisiPage() {
                     )}
                     {ubgtRows.length > 0 ? (
                       <div className="w-full overflow-x-auto">
-                        <table className="w-full border-collapse text-xs" style={{ border: "1px solid #d2d2d2" }}>
+                        <table className="w-full border-collapse text-xs text-gray-900 dark:text-gray-100" style={{ border: "1px solid #d2d2d2" }}>
                           <thead>
                             <tr className="bg-gray-50 dark:bg-gray-800">
                               {["Dönem", "Kişi(ler)", "Ücret (BRÜT)", "Katsayı", "Günlük brüt", "UBGT gün", "UBGT ücreti", ""].map(

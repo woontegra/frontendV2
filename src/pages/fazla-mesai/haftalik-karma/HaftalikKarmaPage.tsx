@@ -15,31 +15,72 @@ import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 import {
   generateDynamicIntervalsFromWitnesses,
   splitByAsgariUcretPeriods,
+  segmentOvertimeResult,
   getAsgariUcretByDate,
+  calculateWeeksBetweenDates,
   clampToLastDayOfMonth,
   computeDisplayRows,
   buildWordTable,
   adaptToWordTable,
   copySectionForWord,
   downloadPdfFromDOM,
+  buildMergedWitnessSegments,
   type FazlaMesaiRowBase,
 } from "@modules/fazla-mesai/shared";
 import { Copy, Trash2 } from "lucide-react";
 import type { PatternDay, HaftalikKarmaWitness, HaftalikKarmaState, WitnessDayGroup } from "./types";
 import WeeklyPatternEditor from "./WeeklyPatternEditor";
-import { calculateWeeklyFMFromDayGroups, generateWeeklyText } from "./utils";
+import {
+  calculateWeeklyFMFromDayGroups,
+  generateWeeklyText,
+  representativeDailyNetFromDayGroups,
+  fallbackDailyNetFromWeeklyFm,
+  witnessWeeklyHolidayFromPlaintiffClaim,
+  sumRegisteredWorkDays,
+} from "./utils";
+import { expandTanikliStandartRowsAnnualLeaveV2 } from "../tanikli-standart/tanikliStandartAnnualLeaveV2";
 import { FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
+import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
+
+/**
+ * Tanık gün gruplarını davacı gruplarıyla grup indeksine göre saati kısıtlar.
+ * Grup 1 → davacı grup 1, grup 2 → davacı grup 2 (v1 HaftalıkKarma ile aynı mantık).
+ * Eşleşen davacı grubu yoksa tanık saatleri olduğu gibi bırakılır.
+ */
+function clampWitnessGroupsByIndex(
+  witnessGroups: Array<{ days?: number; dayCount?: number; startTime: string; endTime: string }>,
+  davaciGroups: PatternDay[]
+): PatternDay[] {
+  const toMins = (t: string) => {
+    const [h, m] = (t || "0:0").split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  const toTime = (n: number) =>
+    `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+
+  return witnessGroups.map((group, groupIdx) => {
+    const dayCount = (group as { days?: number; dayCount?: number }).days ?? group.dayCount ?? 0;
+    const davaciGroup = davaciGroups[groupIdx];
+    if (!davaciGroup?.startTime || !davaciGroup?.endTime) {
+      return { dayCount, startTime: group.startTime, endTime: group.endTime };
+    }
+    const kesikGir = Math.max(toMins(group.startTime), toMins(davaciGroup.startTime));
+    const kesikCik = Math.min(toMins(group.endTime), toMins(davaciGroup.endTime));
+    return { dayCount, startTime: toTime(kesikGir), endTime: toTime(kesikCik) };
+  });
+}
 
 const PAGE_TITLE = "Haftalık Karma Fazla Mesai Hesaplama";
 const RECORD_TYPE = "haftalik_karma_fazla_mesai";
 const REDIRECT_BASE_PATH = "/fazla-mesai/haftalik-karma";
 
-const GELIR_VERGISI_BIRINCI_DILIM = 0.15;
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
 
@@ -90,6 +131,8 @@ export default function HaftalikKarmaPage() {
   const [mahsuplasmaMiktari, setMahsuplasmaMiktari] = useState("");
   const [zamanasimi, setZamanasimi] = useState<{ nihaiBaslangic?: string } | null>(null);
   const [exclusions, setExclusions] = useState<Array<{ id: string; type: string; start: string; end: string; days: number }>>([]);
+  /** Yıllık izin / UBGT V2: boş = tüm takvim günleri düşer; 0–6 = JS getDay (0 Pazar) hafta tatili — o gün düşümde sayılmaz. */
+  const [haftaTatiliGunu, setHaftaTatiliGunu] = useState<number | "">("");
   const [currentRecordName, setCurrentRecordName] = useState<string | undefined>();
   const [show270Dropdown, setShow270Dropdown] = useState(false);
   const [showZamanaModal, setShowZamanaModal] = useState(false);
@@ -175,6 +218,12 @@ export default function HaftalikKarmaPage() {
         if (Array.isArray(mr)) setManualRows(mr);
         const ro = raw.rowOverrides ?? res.data?.rowOverrides;
         if (ro && typeof ro === "object") setRowOverrides(ro);
+        const htg = raw.haftaTatiliGunu ?? res.data?.haftaTatiliGunu;
+        if (htg !== undefined && htg !== null) {
+          setHaftaTatiliGunu(htg === "" ? "" : Number(htg));
+        } else {
+          setHaftaTatiliGunu("");
+        }
         if (res.name) setCurrentRecordName(res.name);
         success("Kayıt yüklendi");
       })
@@ -198,15 +247,19 @@ export default function HaftalikKarmaPage() {
     );
     map.set("DAVACI", davaciFM);
 
+    const davaciGroupsForClamp = haftalikKarmaState.dayGroups;
     haftalikKarmaState.witnesses.forEach((w, idx) => {
-      const wGroups = w.dayGroups?.length
-        ? (w.dayGroups as WitnessDayGroup[]).map((g) => ({
-            dayCount: g.days ?? g.dayCount ?? 0,
-            startTime: g.startTime ?? "",
-            endTime: g.endTime ?? "",
-          }))
-        : haftalikKarmaState.dayGroups;
-      const wFM = calculateWeeklyFMFromDayGroups(wGroups, false, 1);
+      const rawGroups = w.dayGroups?.length
+        ? (w.dayGroups as WitnessDayGroup[])
+        : davaciGroupsForClamp.map((g) => ({ days: g.dayCount, startTime: g.startTime, endTime: g.endTime }));
+      const wGroups = clampWitnessGroupsByIndex(rawGroups, davaciGroupsForClamp);
+      const wHt = witnessWeeklyHolidayFromPlaintiffClaim({
+        davaciDayGroups: davaciGroupsForClamp,
+        davaciHasWeeklyHoliday: hasHoliday,
+        davaciWeeklyHolidayGroup: holidayGroup,
+        witnessDayGroups: wGroups,
+      });
+      const wFM = calculateWeeklyFMFromDayGroups(wGroups, wHt.hasWeeklyHoliday, wHt.weeklyHolidayGroup);
       const label = (w.name && String(w.name).trim()) || `TANIK ${idx + 1}`;
       map.set(label, wFM);
     });
@@ -287,7 +340,15 @@ export default function HaftalikKarmaPage() {
       const wStart = new Date(w.dateIn);
       const wEnd = new Date(w.dateOut);
 
-      const overlaps = sorted.filter((o, i) => i !== idx && new Date(o.dateIn).getTime() > wStart.getTime() && new Date(o.dateIn).getTime() < wEnd.getTime());
+      // TanikliStandartPage splitWitnesses ile aynı: içeride başlayan + aynı başlangıçta sonraki indeks
+      const overlaps = sorted.filter((other, otherIdx) => {
+        if (otherIdx === idx) return false;
+        const oStart = new Date(other.dateIn);
+        return (
+          (oStart > wStart && oStart < wEnd) ||
+          (oStart.getTime() === wStart.getTime() && otherIdx > idx)
+        );
+      });
 
       if (overlaps.length === 0) {
         split.push(w);
@@ -297,6 +358,8 @@ export default function HaftalikKarmaPage() {
 
         for (const ov of overlaps) {
           const ovStart = new Date(ov.dateIn);
+          const ovEnd = new Date(ov.dateOut);
+          if (ovEnd.getTime() < cur.getTime()) continue;
           if (cur < ovStart) {
             const segEnd = new Date(ovStart);
             segEnd.setDate(segEnd.getDate() - 1);
@@ -304,7 +367,6 @@ export default function HaftalikKarmaPage() {
               split.push({ ...w, dateIn: cur.toISOString().slice(0, 10), dateOut: segEnd.toISOString().slice(0, 10) });
             }
           }
-          const ovEnd = new Date(ov.dateOut);
           const next = new Date(ovEnd);
           next.setDate(next.getDate() + 1);
           cur = next;
@@ -335,79 +397,153 @@ export default function HaftalikKarmaPage() {
   }, [haftalikKarmaState, davaciForInterval, splitWitnesses]);
 
   const rows = useMemo(() => {
-    const generatedRows: Array<FazlaMesaiRowBase & { originalWeekCount?: number; periodLabel?: string }> = [];
+    const davaciStart = haftalikKarmaState.weeklyStartDateISO;
+    const davaciEnd   = haftalikKarmaState.weeklyEndDateISO;
+    if (!davaciStart || !davaciEnd) return [];
 
-    for (const interval of intervals) {
-      const intStart = new Date(interval.start);
-      const intEnd = new Date(interval.end);
-      const periodLabel = getPeriodLabelForInterval(intStart, intEnd);
-      const periodFM = fmHoursMap.get(periodLabel) ?? 0;
+    const kats = katSayi || 1;
 
-      const segments = splitByAsgariUcretPeriods(intStart, intEnd);
+    // Davacı gün grupları (kıyaslama tabanı)
+    const davaciGroups = haftalikKarmaState.dayGroups;
+    const hasHoliday = haftalikKarmaState.hasWeeklyHoliday ?? false;
+    const holidayGroup = haftalikKarmaState.weeklyHolidayGroup ?? 1;
 
-      for (const seg of segments) {
-        const segStart = seg.start;
-        const segEnd = seg.end;
-        const segStartISO = segStart.toISOString().slice(0, 10);
-        const segEndISO = segEnd.toISOString().slice(0, 10);
-        const diffDays = Math.round((segEnd.getTime() - segStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-        const weeks = Math.round(diffDays / 7) || 1;
-        const brut = getAsgariUcretByDate(segStartISO) || 0;
-        const kats = katSayi || 1;
-        const fm = Number(((brut * kats * weeks * periodFM) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2);
-        const net = Number((fm * (1 - DAMGA_VERGISI_ORANI - 0.15)).toFixed(2));
+    // Tanıklar: TanikliStandartPage ile aynı mantık —
+    //   1) hem tarih hem gün grubu zorunlu
+    //   2) tanık saatleri davacı saatiyle kısıtlanır (Math.max giriş, Math.min çıkış)
+    const witnesses = haftalikKarmaState.witnesses
+      .filter((w) => {
+        if (!w.startDateISO || !w.endDateISO) return false;
+        return w.dayGroups?.some(
+          (g) => (g.days ?? g.dayCount ?? 0) > 0 && g.startTime && g.endTime
+        );
+      })
+      .map((w) => {
+        const rawGroups = w.dayGroups?.length ? w.dayGroups : davaciGroups;
+        // Her gün grubunu karşılık gelen davacı grubuyla kısıtla (grup indeksi bazlı, v1 ile aynı)
+        const clampedGroups = clampWitnessGroupsByIndex(rawGroups, davaciGroups);
+        const wHt = witnessWeeklyHolidayFromPlaintiffClaim({
+          davaciDayGroups: davaciGroups,
+          davaciHasWeeklyHoliday: hasHoliday,
+          davaciWeeklyHolidayGroup: holidayGroup,
+          witnessDayGroups: clampedGroups,
+        });
+        const wFM = calculateWeeklyFMFromDayGroups(clampedGroups, wHt.hasWeeklyHoliday, wHt.weeklyHolidayGroup);
+        const repNet = representativeDailyNetFromDayGroups(
+          clampedGroups,
+          wHt.hasWeeklyHoliday,
+          wHt.weeklyHolidayGroup
+        );
+        const dailyNet =
+          repNet ??
+          fallbackDailyNetFromWeeklyFm(wFM, clampedGroups, wHt.hasWeeklyHoliday, wHt.weeklyHolidayGroup);
+        const workDays = sumRegisteredWorkDays(clampedGroups);
+        const annualLeaveHg = Math.max(1, Math.min(7, workDays || 6));
+        const annualLeaveSevenDay: "tatilli" | "tatilsiz" = wHt.hasWeeklyHoliday ? "tatilli" : "tatilsiz";
+        return {
+          startMs: new Date(w.startDateISO).getTime(),
+          endMs: new Date(w.endDateISO).getTime(),
+          fmHours: wFM,
+          dailyNet,
+          annualLeaveHg,
+          annualLeaveSevenDay,
+        };
+      })
+      .filter(
+        (w) =>
+          Number.isFinite(w.startMs) &&
+          Number.isFinite(w.endMs) &&
+          !Number.isNaN(w.startMs) &&
+          !Number.isNaN(w.endMs)
+      );
 
-        const rowId = `row-${segStartISO}-${segEndISO}`;
-        if (DEBUG && segStartISO.includes("2023")) {
-          console.log("[HaftalikKarma rows] segment:", { segStartISO, segEndISO, diffDays, weeks, periodLabel });
+    // TanikliStandartPage ile aynı kaynak: buildMergedWitnessSegments (tarih/sınırlama birebir)
+    const merged = buildMergedWitnessSegments(davaciStart, davaciEnd, witnesses);
+
+    // Adım 4: Asgari ücret dönemlerine bölerek satır oluştur (TanikliStandartPage ile aynı)
+    const generatedRows: Array<FazlaMesaiRowBase & { originalWeekCount?: number }> = [];
+
+    merged.forEach((seg, segIdx) => {
+      const periods = segmentOvertimeResult({ start: seg.start, end: seg.end });
+
+      periods.forEach((period, periodIdx) => {
+        let startDate = new Date(period.start);
+        const endDate = new Date(period.end);
+
+        if (zamanasimiBaslangic) {
+          const limitDate = new Date(zamanasimiBaslangic);
+          if (endDate < limitDate) return;
+          if (startDate < limitDate && endDate >= limitDate) {
+            startDate = new Date(limitDate);
+            period.start = startDate.toISOString().slice(0, 10);
+          }
         }
+
+        const weeks = calculateWeeksBetweenDates(period.start, period.end) || 1;
+        const brut = getAsgariUcretByDate(period.start) || 0;
+        const fm = Number(((brut * kats * weeks * seg.fmHours) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2);
+        const net = Number((Number(fm) * (1 - DAMGA_VERGISI_ORANI - 0.15)).toFixed(2));
+
         generatedRows.push({
-          id: rowId,
-          startISO: segStartISO,
-          endISO: segEndISO,
-          rangeLabel: `${format(segStart, "dd.MM.yyyy")} – ${format(segEnd, "dd.MM.yyyy")}`,
+          id: `row-${period.start}-${period.end}-${segIdx}-${periodIdx}`,
+          startISO: period.start,
+          endISO: period.end,
+          rangeLabel: `${formatDateTR(period.start)} – ${formatDateTR(period.end)}`,
           weeks,
           originalWeekCount: weeks,
           brut,
           katsayi: kats,
-          fmHours: periodFM,
+          fmHours: seg.fmHours,
+          dailyNet: seg.dailyNet,
+          annualLeaveHg: seg.annualLeaveHg,
+          annualLeaveSevenDay: seg.annualLeaveSevenDay,
           fm,
           net,
-          periodLabel,
         });
-      }
-    }
+      });
+    });
 
-    generatedRows.sort((a, b) => (a.startISO || "").localeCompare(b.startISO || ""));
+    if (generatedRows.length === 0) return [];
 
-    // Zamanaşımı
-    if (zamanasimiBaslangic) {
-      const zDate = new Date(zamanasimiBaslangic);
-      const filtered = generatedRows
-        .map((r) => {
-          const rEnd = new Date(r.endISO!);
-          const rStart = new Date(r.startISO!);
-          if (rEnd < zDate) return null;
-          if (rStart < zDate && rEnd >= zDate) {
-            const diffMs = rEnd.getTime() - zDate.getTime();
-            const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
-            const adjWeeks = Math.round(diffDays / 7);
-            return {
-              ...r,
-              startISO: zamanasimiBaslangic,
-              rangeLabel: `${formatDateTR(zamanasimiBaslangic)} – ${formatDateTR(r.endISO)}`,
-              weeks: adjWeeks,
-              originalWeekCount: adjWeeks,
-            };
-          }
-          return r;
-        })
-        .filter(Boolean) as typeof generatedRows;
-      return filtered;
+    const davaciHg = Math.max(
+      1,
+      Math.min(7, haftalikKarmaState.dayGroups.reduce((s, g) => s + (g.dayCount || 0), 0) || 6)
+    );
+    const davaciSevenDay: "tatilli" | "tatilsiz" =
+      davaciHg === 7 && (haftalikKarmaState.hasWeeklyHoliday ?? false) ? "tatilli" : "tatilsiz";
+
+    if (exclusions.length > 0) {
+      const weeklyOffDayNum =
+        haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
+      const weeklyOffDay = Number.isInteger(weeklyOffDayNum) ? weeklyOffDayNum : null;
+      return expandTanikliStandartRowsAnnualLeaveV2(
+        generatedRows as Array<FazlaMesaiRowBase & { dailyNet?: number }>,
+        exclusions,
+        davaciHg,
+        weeklyOffDay,
+        davaciSevenDay
+      );
     }
 
     return generatedRows;
-  }, [intervals, fmHoursMap, getPeriodLabelForInterval, katSayi, zamanasimiBaslangic]);
+  }, [haftalikKarmaState, fmHoursMap, katSayi, zamanasimiBaslangic, exclusions, haftaTatiliGunu]);
+
+  /** UBGT kataloğu: davacı/tanık ham tarihleri değil, cetveldeki satırların birleşik aralığı. */
+  const ubgtFmCatalogRange = useMemo(() => {
+    let start = "";
+    let end = "";
+    const consider = (r: FazlaMesaiRowBase) => {
+      const s = (r.startISO || "").slice(0, 10);
+      const e = (r.endISO || "").slice(0, 10);
+      if (!s || !e) return;
+      if (!start || s < start) start = s;
+      if (!end || e > end) end = e;
+    };
+    rows.forEach(consider);
+    manualRows.forEach(consider);
+    if (!start || !end || start > end) return { start: "", end: "" };
+    return { start, end };
+  }, [rows, manualRows]);
 
   const davaciWeeklyFM = fmHoursMap.get("DAVACI") ?? 0;
 
@@ -420,10 +556,20 @@ export default function HaftalikKarmaPage() {
     const davaciText = generateWeeklyText(haftalikKarmaState.dayGroups, "DAVACI", hasHoliday, holidayGroup);
     if (davaciText) results.push({ label: davaciText.label, text: davaciText.text });
 
+    const davaciGroupsForPeriods = haftalikKarmaState.dayGroups;
     haftalikKarmaState.witnesses.forEach((w, idx) => {
-      const groups = w.dayGroups?.length ? w.dayGroups : haftalikKarmaState.dayGroups;
+      const rawGroups = w.dayGroups?.length
+        ? (w.dayGroups as WitnessDayGroup[])
+        : davaciGroupsForPeriods.map((g) => ({ days: g.dayCount, startTime: g.startTime, endTime: g.endTime }));
+      const clampedGroups = clampWitnessGroupsByIndex(rawGroups, davaciGroupsForPeriods);
       const wName = (w.name && String(w.name).trim()) || `TANIK ${idx + 1}`;
-      const wText = generateWeeklyText(groups, wName, false, 1);
+      const wHt = witnessWeeklyHolidayFromPlaintiffClaim({
+        davaciDayGroups: davaciGroupsForPeriods,
+        davaciHasWeeklyHoliday: hasHoliday,
+        davaciWeeklyHolidayGroup: holidayGroup,
+        witnessDayGroups: clampedGroups,
+      });
+      const wText = generateWeeklyText(clampedGroups, wName, wHt.hasWeeklyHoliday, wHt.weeklyHolidayGroup);
       if (wText) results.push({ label: wText.label, text: wText.text });
     });
 
@@ -445,6 +591,7 @@ export default function HaftalikKarmaPage() {
         istenCikis: haftalikKarmaState.weeklyEndDateISO,
         zamanasimiBaslangic,
         useRawWeeks: true,
+        skipAnnualLeaveExclusions: exclusions.length > 0,
       }) as Array<{ fm: number; net: number } & FazlaMesaiRowBase>;
       if (DEBUG) {
         const zeros = result.filter((r) => (r.weeks ?? 0) <= 0);
@@ -457,18 +604,37 @@ export default function HaftalikKarmaPage() {
     }
   }, [rows, manualRows, rowOverrides, katSayi, davaciWeeklyFM, exclusions, mode270, haftalikKarmaState, zamanasimiBaslangic]);
 
-  const totalBrut = useMemo(() => computedDisplayRows.reduce((a, r) => a + (r.fm ?? 0), 0), [computedDisplayRows]);
-  const totalNet = useMemo(() => computedDisplayRows.reduce((a, r) => a + (r.net ?? 0), 0), [computedDisplayRows]);
+  /** Tanıklı Standart ile aynı: FM saati 0 olan otomatik bölüm satırları cetvelde gösterilmez */
+  const tableDisplayRows = useMemo(
+    () =>
+      (computedDisplayRows as Array<{ fmHours?: number; fm?: number }>).filter(
+        (r) => Number(r.fmHours ?? 0) !== 0
+      ) as typeof computedDisplayRows,
+    [computedDisplayRows]
+  );
 
+  const totalBrut = useMemo(() => tableDisplayRows.reduce((a, r) => a + (r.fm ?? 0), 0), [tableDisplayRows]);
+  const totalNet = useMemo(() => tableDisplayRows.reduce((a, r) => a + (r.net ?? 0), 0), [tableDisplayRows]);
+
+  const exitYear = haftalikKarmaState.weeklyEndDateISO
+    ? new Date(haftalikKarmaState.weeklyEndDateISO).getFullYear()
+    : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const gelirVergisi = Math.round(totalBrut * 0.15 * GELIR_VERGISI_BIRINCI_DILIM * 100) / 100;
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
-    return { gelirVergisi, damgaVergisi, netYillik, gelirVergisiDilimleri: "(%15)" };
-  }, [totalBrut]);
+    return {
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets,
+    };
+  }, [totalBrut, exitYear]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -579,8 +745,9 @@ export default function HaftalikKarmaPage() {
           exclusions,
           manualRows,
           rowOverrides,
+          haftaTatiliGunu,
         },
-        formValues: { haftalikKarmaState, katSayi, mode270, mahsuplasmaMiktari, zamanasimi },
+        formValues: { haftalikKarmaState, katSayi, mode270, mahsuplasmaMiktari, zamanasimi, haftaTatiliGunu },
         totals: { toplam: totalBrut },
         brut_total: totalBrut,
         net_total: brutNetResult.netYillik,
@@ -591,6 +758,7 @@ export default function HaftalikKarmaPage() {
         haftalikKarmaState,
         manualRows,
         rowOverrides,
+        haftaTatiliGunu,
       },
       name: currentRecordName,
       id: effectiveId,
@@ -606,6 +774,7 @@ export default function HaftalikKarmaPage() {
     exclusions,
     manualRows,
     rowOverrides,
+    haftaTatiliGunu,
     totalBrut,
     brutNetResult.netYillik,
     currentRecordName,
@@ -621,7 +790,7 @@ export default function HaftalikKarmaPage() {
     s.push({ id: "ust", title: "Genel Bilgiler", html: buildWordTable(n1.headers, n1.rows) });
 
     const cetvelHeaders = ["Tarih Aralığı", "Hafta", "Ücret", "Kat Sayı", "FM Saat", "225", "1,5", "Fazla Mesai"];
-    const cetvelRows = computedDisplayRows.map((r) => [
+    const cetvelRows = tableDisplayRows.map((r) => [
       (r.rangeLabel || (r.startISO && r.endISO ? `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}` : "")) || "-",
       String((r as any).displayWeeks ?? r.weeks ?? 0),
       fmt(r.brut ?? 0),
@@ -647,13 +816,13 @@ export default function HaftalikKarmaPage() {
     s.push({ id: "brutnet", title: "Brüt'ten Net'e", html: buildWordTable(n3.headers, n3.rows) });
 
     const mahsupNum = Number(String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".")) || 0;
-    if (mahsupNum > 0) {
+    {
       const hakkaniyetIndirimi = totalBrut / 3;
       const sonNet = brutNetResult.netYillik - mahsupNum;
       const mahsupRows: { label: string; value: string }[] = [
         { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
-        { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
+        ...(mahsupNum > 0 ? [{ label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` }] : []),
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
       ];
       const n4 = adaptToWordTable(mahsupRows);
@@ -665,7 +834,7 @@ export default function HaftalikKarmaPage() {
     haftalikKarmaState.weeklyStartDateISO,
     haftalikKarmaState.weeklyEndDateISO,
     davaciWeeklyFM,
-    computedDisplayRows,
+    tableDisplayRows,
     totalBrut,
     brutNetResult,
     mahsuplasmaMiktari,
@@ -976,7 +1145,38 @@ export default function HaftalikKarmaPage() {
               </details>
             </section>
 
-            <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+            <div className="space-y-3">
+              <div className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800 px-4 py-3 shadow-sm">
+                <label className={`${labelCls} mb-1`}>Hafta tatili günü (yıllık izin / UBGT düşümü)</label>
+                <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+                  Seçilmezse işaretlenen her takvim günü düşüme girer. Bir gün seçilirse, o haftanın tatil günü dışlamada sayılmaz (Tanıklı Standart ile aynı).
+                </p>
+                <select
+                  value={haftaTatiliGunu === "" || haftaTatiliGunu == null ? "" : String(haftaTatiliGunu)}
+                  onChange={(e) =>
+                    setHaftaTatiliGunu(e.target.value === "" ? "" : Number(e.target.value))
+                  }
+                  className={`${inputCls} text-xs max-w-md`}
+                >
+                  <option value="">Seçilmedi (tüm günlerde düşüm)</option>
+                  <option value="1">Pazartesi</option>
+                  <option value="2">Salı</option>
+                  <option value="3">Çarşamba</option>
+                  <option value="4">Perşembe</option>
+                  <option value="5">Cuma</option>
+                  <option value="6">Cumartesi</option>
+                  <option value="0">Pazar</option>
+                </select>
+              </div>
+              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+              <UbgtFmDayPicker
+                rangeStart={ubgtFmCatalogRange.start}
+                rangeEnd={ubgtFmCatalogRange.end}
+                exclusions={exclusions}
+                setExclusions={setExclusions}
+                showToastError={showToastError}
+              />
+            </div>
 
             {/* 270 Saat, Zamanaşımı, Kat Sayı - Hesaplama cetvelinin hemen üstünde */}
             <div className="flex flex-wrap items-center gap-2">
@@ -1022,8 +1222,9 @@ export default function HaftalikKarmaPage() {
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Cetveli</h2>
               </div>
+              <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
               <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse font-sans table-fixed" style={{ minWidth: "640px" }}>
+            <table className="w-full text-xs border-collapse font-sans table-fixed text-gray-900 dark:text-gray-100" style={{ minWidth: "640px" }}>
               <colgroup>
                 <col style={{ width: "30%" }} />
                 <col style={{ width: "6%" }} />
@@ -1049,7 +1250,7 @@ export default function HaftalikKarmaPage() {
                 </tr>
               </thead>
               <tbody>
-                {computedDisplayRows.length === 0 ? (
+                {tableDisplayRows.length === 0 ? (
                   <tr>
                     <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-left">—</td>
                     <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">0</td>
@@ -1062,7 +1263,7 @@ export default function HaftalikKarmaPage() {
                     <td className="px-2 py-1 border border-gray-200 dark:border-gray-600" />
                   </tr>
                 ) : (
-                  computedDisplayRows.map((r: any, i: number) => {
+                  tableDisplayRows.map((r: any, i: number) => {
                     const tableInputCls = "w-full min-w-0 px-1.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right";
                     const startISO = r.startISO ?? "";
                     const endISO = r.endISO ?? "";
@@ -1082,6 +1283,11 @@ export default function HaftalikKarmaPage() {
                                 handleRowOverride(r.id, { endISO: raw ? clampToLastDayOfMonth(raw) : undefined });
                               }} className={`${tableInputCls} flex-1 min-w-0`} title="Bitiş tarihi" />
                           </div>
+                            {r.yillikIzinAciklama ? (
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                {r.yillikIzinAciklama}
+                              </div>
+                            ) : null}
                         </td>
                         <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
                           <input type="number" min={0} value={weeksVal} onChange={(e) => handleRowOverride(r.id, { weeks: parseInt(e.target.value, 10) || 0 })} className={tableInputCls} />
@@ -1108,7 +1314,7 @@ export default function HaftalikKarmaPage() {
                     );
                   })
                 )}
-                {computedDisplayRows.length > 0 && (
+                {tableDisplayRows.length > 0 && (
                   <tr className="bg-indigo-50 dark:bg-indigo-900/30 font-semibold">
                     <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600">Toplam Fazla Mesai:</td>
                     <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
@@ -1236,7 +1442,7 @@ export default function HaftalikKarmaPage() {
         open={showMahsuplasamaModal}
         onClose={() => setShowMahsuplasamaModal(false)}
         onSave={(total) => setMahsuplasmaMiktari(String(total.toFixed(2)))}
-        periodLabels={computedDisplayRows.map((r) => r.startISO || "").filter(Boolean)}
+        periodLabels={tableDisplayRows.map((r) => r.startISO || "").filter(Boolean)}
       />
     </div>
   );

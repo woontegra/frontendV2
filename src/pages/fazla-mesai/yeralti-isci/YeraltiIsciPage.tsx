@@ -8,11 +8,14 @@ import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { usePageStyle } from "@/hooks/usePageStyle";
 import { getVideoLink } from "@/config/videoLinks";
-import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
+import { calcWorkPeriodBilirKisi, calculateWeeksBetweenDates, isoToTR } from "@/utils/dateUtils";
 import { apiPost } from "@/utils/apiClient";
-import { buildWordTable, adaptToWordTable, copySectionForWord } from "@modules/fazla-mesai/shared";
+import { buildWordTable, adaptToWordTable, copySectionForWord, clampToLastDayOfMonth, getAsgariUcretByDate } from "@modules/fazla-mesai/shared";
+import { expandYeraltiRowsForExclusions } from "./yeraltiAnnualLeaveUbgtExpand";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
+import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
 import { NotlarAccordion } from "../standart/NotlarAccordion";
@@ -22,6 +25,7 @@ import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { useTanikliStandartState } from "../tanikli-standart/state";
 import { fmt, fmtCurrency } from "../standart/calculations";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 
 const PAGE_TITLE = "Yeraltı İşçileri Fazla Mesai Hesaplama";
@@ -29,6 +33,9 @@ const RECORD_TYPE = "fazla_mesai_yeralti_isci";
 const REDIRECT_BASE_PATH = "/fazla-mesai/yeralti-isci";
 const FAZLA_MESAI_DENOMINATOR = 187.5;
 const FAZLA_MESAI_KATSAYI = 2;
+/** Yeraltı: haftalık yasal çalışma üst sınırı (backend `WEEKLY_WORK_LIMIT` ile aynı) */
+const WEEKLY_WORK_LIMIT_YERALTI = 37.5;
+const STANDARD_DAILY_REFERENCE_HOURS_Y = 6.25;
 const GELIR_VERGISI_BIRINCI_DILIM_ORANI = 0.15;
 
 const inputCls =
@@ -40,8 +47,13 @@ const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200"
 
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
+/** 270 Yargıtay: haftalık FM saatinden satır bazında düşüm (backend ile aynı) */
+const YARGITAY_270_HAFTALIK_FM_DUSUM_SAAT = 5 + 12 / 60;
 
 export type YeraltiPeriodRow = {
+  /** Cetvel satırı kimliği (+/− ve düzenleme için) */
+  id?: string;
+  isManual?: boolean;
   rangeLabel?: string;
   weeks: number;
   brut: number;
@@ -55,7 +67,45 @@ export type YeraltiPeriodRow = {
   startISO: string;
   endISO: string;
   text?: string;
+  /** UBGT / izin satır bölmesi — Tanıklı Standart ile aynı metin */
+  yillikIzinAciklama?: string;
 };
+
+function genYeraltiRowId(): string {
+  return `yr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** Backend `yeraltiIsci.service.js` ile aynı yuvarlama */
+function applyYargitayRoundingYeralti(decimalHours: number): number {
+  const hours = Math.floor(decimalHours);
+  const fractionalPart = decimalHours - hours;
+  const minutes = Math.round(fractionalPart * 60);
+  if (minutes === 0) return hours;
+  if (minutes <= 30) return hours + 0.5;
+  return hours + 1;
+}
+
+/** Tanık satırı için haftalık FM saati — yüzey 45 değil yeraltı 37,5 limiti */
+function witnessWeeklyFmHoursForYeralti(
+  netDaily: number,
+  weeklyDays: number,
+  activeTab: "tatilli" | "tatilsiz"
+): number {
+  const n = weeklyDays;
+  let weeklyCalc = 0;
+  if (n === 7 && activeTab === "tatilli") {
+    const weeklyWork = netDaily * 6;
+    const extra = Math.max(0, netDaily - STANDARD_DAILY_REFERENCE_HOURS_Y);
+    weeklyCalc = weeklyWork + extra;
+  } else {
+    const daysWork = n > 0 ? n : 7;
+    weeklyCalc = netDaily * daysWork;
+  }
+  // Backend `yeraltiIsci.service.js` segment yolu: haftalık toplam her zaman `applyYargitayRounding`
+  // (tatilli/tatilsiz). `Math.round` kullanılmaz; örn. 66,5 → 67 değil 66,5 kalır → FM 29 (29,5 değil).
+  const rounded = applyYargitayRoundingYeralti(weeklyCalc);
+  return Math.max(0, rounded - WEEKLY_WORK_LIMIT_YERALTI);
+}
 
 function formatDateTR(iso: string | undefined): string {
   if (!iso) return "";
@@ -113,7 +163,8 @@ export default function YeraltiIsciPage() {
   const [haftalikMesai, setHaftalikMesai] = useState(0);
   const backendRequestIdRef = useRef(0);
 
-  const { iseGiris, istenCikis, weeklyDays, davaci, taniklar, mode270, katSayi, mahsuplasmaMiktari } = formValues;
+  const { iseGiris, istenCikis, weeklyDays, haftaTatiliGunu, davaci, taniklar, mode270, katSayi, mahsuplasmaMiktari } =
+    formValues;
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
   const include270 = mode270 !== "none";
 
@@ -144,6 +195,12 @@ export default function YeraltiIsciPage() {
           ...(innerForm.iseGiris != null && { iseGiris: innerForm.iseGiris }),
           ...(innerForm.istenCikis != null && { istenCikis: innerForm.istenCikis }),
           ...(innerForm.weeklyDays != null && { weeklyDays: String(innerForm.weeklyDays) }),
+          ...(innerForm.haftaTatiliGunu !== undefined && {
+            haftaTatiliGunu:
+              innerForm.haftaTatiliGunu === "" || innerForm.haftaTatiliGunu === null
+                ? ""
+                : Number(innerForm.haftaTatiliGunu),
+          }),
           ...(innerForm.davaci && { davaci: { ...p.davaci, ...innerForm.davaci } }),
           ...(Array.isArray(innerForm.taniklar) && innerForm.taniklar.length > 0 && { taniklar: innerForm.taniklar }),
           ...(innerForm.mode270 && { mode270: innerForm.mode270 }),
@@ -154,7 +211,14 @@ export default function YeraltiIsciPage() {
         }));
         const loadedRows = innerForm.rows ?? raw.rows;
         if (Array.isArray(loadedRows) && loadedRows.length > 0) {
-          setRows(loadedRows as YeraltiPeriodRow[]);
+          setRows(
+            (loadedRows as YeraltiPeriodRow[]).map((r) => ({
+              ...r,
+              id: r.id ?? genYeraltiRowId(),
+              fm: Number(r.fm) || 0,
+              net: Number(r.net) || 0,
+            }))
+          );
         }
         if (res.name) setCurrentRecordName(res.name);
         success("Kayıt yüklendi");
@@ -188,6 +252,55 @@ export default function YeraltiIsciPage() {
 
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
 
+  const weeklyOffDayNum =
+    haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
+  const weeklyOffDay = Number.isInteger(weeklyOffDayNum) ? weeklyOffDayNum : null;
+
+  /** Tanıklı standart izin/UBGT bölmesi için günlük net çalışma (davacı saatleri). */
+  const davaciDailyNet = useMemo(() => {
+    const toMin = (t: string) => {
+      const [h, m] = (t || "0:0").split(":").map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    const computeBreak = (b: number) => {
+      if (!Number.isFinite(b) || b <= 0) return 0;
+      if (b <= 4) return 0.25;
+      if (b <= 7.5) return 0.5;
+      if (b < 11) return 1;
+      if (b < 14) return 1.5;
+      if (b < 15) return 2;
+      return 3;
+    };
+    if (!davaci?.in?.trim() || !davaci?.out?.trim()) return null;
+    const brut = Math.max(0, (toMin(davaci.out) - toMin(davaci.in)) / 60);
+    const net = Math.max(0, brut - computeBreak(brut));
+    return Number.isFinite(net) ? net : null;
+  }, [davaci?.in, davaci?.out]);
+
+  /** UBGT listesi yalnızca cetvel satırlarının tarih aralığıyla sınırlı (tanık/davacı beyanına göre genişletilmez). */
+  const ubgtFmCatalogRange = useMemo(() => {
+    const boundedRows = rows.filter((r) => {
+      const s = (r.startISO || "").slice(0, 10);
+      const e = (r.endISO || "").slice(0, 10);
+      return s.length >= 10 && e.length >= 10;
+    });
+    if (boundedRows.length > 0) {
+      let start = "";
+      let end = "";
+      for (const r of boundedRows) {
+        const s = (r.startISO || "").slice(0, 10);
+        const e = (r.endISO || "").slice(0, 10);
+        if (!start || s < start) start = s;
+        if (!end || e > end) end = e;
+      }
+      if (start && end && start <= end) return { start, end };
+    }
+    const dIn = (iseGiris || davaci?.dateIn || "").slice(0, 10);
+    const dOut = (istenCikis || davaci?.dateOut || "").slice(0, 10);
+    if (!dIn || !dOut || dIn > dOut) return { start: "", end: "" };
+    return { start: dIn, end: dOut };
+  }, [rows, iseGiris, istenCikis, davaci?.dateIn, davaci?.dateOut]);
+
   const apiMode270 = mode270 === "simple" ? "simple" : "detailed";
 
   useEffect(() => {
@@ -219,6 +332,7 @@ export default function YeraltiIsciPage() {
                     start: s.length > 10 ? s.slice(0, 10) : s,
                     end: eStr.length > 10 ? eStr.slice(0, 10) : eStr,
                     days: Number(e.days) || 0,
+                    type: e.type ?? "",
                   };
                 })
                 .filter((e) => e.start.length >= 10 && e.end.length >= 10)
@@ -233,6 +347,7 @@ export default function YeraltiIsciPage() {
             },
             witnesses: taniklar,
             weeklyDays: Number(weeklyDays) || 6,
+            haftaTatiliGunu: weeklyOffDay,
             activeTab,
             exclusions: exclusionsForApi,
             katSayi: katSayi || 1,
@@ -258,18 +373,105 @@ export default function YeraltiIsciPage() {
           }
           const result = await response.json();
           if (requestId !== backendRequestIdRef.current) return;
-          const fromBackend: YeraltiPeriodRow[] = (result.rows || []).map((r: YeraltiPeriodRow) => ({ ...r }));
+          const fromBackend: YeraltiPeriodRow[] = (result.rows || []).map((r: YeraltiPeriodRow, i: number) => ({
+            ...r,
+            id: r.id ?? `tmp-yeralti-${i}-${r.startISO ?? ""}`,
+          }));
+
+          // ── HER SATIR İÇİN EN İYİ TANIK FM OVERRIDE + AYNI FM'Lİ SATIRLARI BİRLEŞTİR ──
+          const _toMin = (t: string) => { const [h, m] = (t || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+          const _computeBreak = (b: number) => {
+            if (!Number.isFinite(b) || b <= 0) return 0;
+            if (b <= 4) return 0.25; if (b <= 7.5) return 0.5;
+            if (b < 11) return 1; if (b < 14) return 1.5; if (b < 15) return 2; return 3;
+          };
+          const _dIn = _toMin(davaci?.in || ""); const _dOut = _toMin(davaci?.out || "");
+          const _hg = Number(weeklyDays) || 6;
+          const _tanikFM = taniklar
+            .filter((t) => t.dateIn && t.dateOut && t.in && t.out)
+            .map((t) => {
+              const tIn = Math.max(_toMin(t.in), _dIn);
+              const tOut = Math.min(_toMin(t.out), _dOut);
+              const brut = Math.max(0, (tOut - tIn) / 60);
+              const brk = _computeBreak(brut);
+              const net = Math.max(0, brut - brk);
+              const fm = witnessWeeklyFmHoursForYeralti(net, _hg, activeTab);
+              return { startMs: new Date(t.dateIn).getTime(), endMs: new Date(t.dateOut).getTime(), fmHours: fm };
+            });
+
+          /** Tanık FM’si ham; sunucu satırı 270 Yargıtay sonrası düşmüş olabilir. Override’da aynı 5:12 düşümü uygulanmalı. */
+          const witnessFmAfterYargitay270 = (h: number) =>
+            include270 && mode270 === "simple"
+              ? Math.max(0, h - YARGITAY_270_HAFTALIK_FM_DUSUM_SAAT)
+              : h;
+
+          const withBestFM = fromBackend.map((row) => {
+            const rS = new Date(row.startISO).getTime(); const rE = new Date(row.endISO).getTime();
+            const active = _tanikFM.filter((t) => t.startMs <= rS && t.endMs >= rE);
+            if (active.length === 0) return row;
+            const best = active.reduce((p, c) => (c.fmHours > p.fmHours ? c : p));
+            const bestAdj = witnessFmAfterYargitay270(best.fmHours);
+            if (bestAdj === row.fmHours) return row;
+            const { fm, net } = recalcYeraltiFmNet(row, bestAdj, katSayi || 1);
+            return { ...row, fmHours: bestAdj, fm, net };
+          });
+
+          const merged: typeof withBestFM = [];
+          for (const row of withBestFM) {
+            const last = merged[merged.length - 1];
+            if (last && last.fmHours === row.fmHours && last.brut === row.brut && last.katsayi === row.katsayi) {
+              const totalWeeks = (last.weeks || 0) + (row.weeks || 0);
+              const { fm, net } = recalcYeraltiFmNet({ ...last, weeks: totalWeeks }, last.fmHours, katSayi || 1);
+              merged[merged.length - 1] = {
+                ...last,
+                endISO: row.endISO,
+                rangeLabel: `${last.rangeLabel?.split(" – ")[0] ?? ""} – ${row.rangeLabel?.split(" – ")[1] ?? ""}`,
+                weeks: totalWeeks,
+                fm,
+                net,
+              };
+            } else {
+              merged.push({ ...row });
+            }
+          }
+          const processedFromBackend = merged.map((row) => ({
+            ...row,
+            fm: Number(row.fm) || 0,
+            net: Number(row.net) || 0,
+          }));
+
+          const applyLeaveFmAdj =
+            include270 && mode270 === "simple"
+              ? (h: number) => Math.max(0, h - YARGITAY_270_HAFTALIK_FM_DUSUM_SAAT)
+              : (h: number) => h;
+
+          const expandedFromBackend =
+            exclusions.length > 0 && davaciDailyNet != null
+              ? expandYeraltiRowsForExclusions(processedFromBackend, exclusions, {
+                  dailyNet: davaciDailyNet,
+                  hg: Number(weeklyDays) || 6,
+                  weeklyOffDay,
+                  davaciSevenDay: Number(weeklyDays) === 7 && activeTab === "tatilli" ? "tatilli" : "tatilsiz",
+                  applyLeaveFmAdj,
+                })
+              : processedFromBackend;
+          // ──────────────────────────────────────────────────────────────────────
+
           setRows((prev) => {
-            if (fromBackend.length === 0) return fromBackend;
-            if (prev.length !== fromBackend.length) return fromBackend;
-            return fromBackend.map((backendRow, idx) => {
-              const cur = prev[idx];
+            const manualKeep = prev.filter((r) => r.isManual);
+            if (expandedFromBackend.length === 0) return manualKeep;
+            const prevApi = prev.filter((r) => !r.isManual);
+            const apiRows = expandedFromBackend.map((backendRow, idx) => {
+              const cur = prevApi[idx];
+              const stableId = cur?.id ? cur.id : genYeraltiRowId();
+              let rowOut = { ...backendRow, id: stableId };
               if (cur?.fmManual && cur.fmHours !== undefined) {
                 const { fm, net } = recalcYeraltiFmNet(backendRow, cur.fmHours, katSayi || 1);
-                return { ...backendRow, fmHours: cur.fmHours, fm, net, fmManual: true, katsayi: backendRow.katsayi };
+                rowOut = { ...rowOut, fmHours: cur.fmHours, fm, net, fmManual: true, katsayi: backendRow.katsayi };
               }
-              return backendRow;
+              return rowOut;
             });
+            return [...apiRows, ...manualKeep];
           });
           setTextPeriods(result.textPeriods || []);
         } catch (e) {
@@ -291,27 +493,36 @@ export default function YeraltiIsciPage() {
     davaci?.out,
     taniklar,
     weeklyDays,
+    haftaTatiliGunu,
     activeTab,
     exclusions,
     katSayi,
     zamanasimiBaslangic,
     include270,
-    apiMode270,
+    mode270,
+    davaciDailyNet,
+    weeklyOffDay,
   ]);
 
-  const totalBrut = useMemo(() => rows.reduce((a, r) => a + (r.fm || 0), 0), [rows]);
+  const totalBrut = useMemo(() => rows.reduce((a, r) => a + (Number(r.fm) || 0), 0), [rows]);
 
+  const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const sskPrim = totalBrut * 0.15;
-    const matrah = Math.max(0, totalBrut - sskPrim);
-    const gelirVergisi = Math.round(matrah * GELIR_VERGISI_BIRINCI_DILIM_ORANI * 100) / 100;
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
-    return { gelirVergisi, damgaVergisi, netYillik, gelirVergisiDilimleri: "(%15)" };
-  }, [totalBrut]);
+    return {
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets,
+    };
+  }, [totalBrut, exitYear]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -340,10 +551,10 @@ export default function YeraltiIsciPage() {
   }, [success, setFormValues]);
 
   const updateRowFmHours = useCallback(
-    (idx: number, fmHours: number) => {
+    (rowId: string, fmHours: number) => {
       setRows((prev) =>
-        prev.map((r, i) => {
-          if (i !== idx) return r;
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
           const { fm, net } = recalcYeraltiFmNet(r, fmHours, katSayi || 1);
           return { ...r, fmHours, fm, net, fmManual: true };
         })
@@ -351,6 +562,67 @@ export default function YeraltiIsciPage() {
     },
     [katSayi]
   );
+
+  const applyYeraltiRowPatch = useCallback(
+    (rowId: string, patch: Partial<YeraltiPeriodRow>) => {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
+          const next: YeraltiPeriodRow = { ...r, ...patch };
+          const s = (next.startISO || "").slice(0, 10);
+          const e = (next.endISO || "").slice(0, 10);
+          if (patch.startISO != null || patch.endISO != null) {
+            if (s.length >= 10 && e.length >= 10) {
+              next.weeks = Math.max(1, calculateWeeksBetweenDates(s, e) || 1);
+              next.rangeLabel = `${formatDateTR(s)} – ${formatDateTR(e)}`;
+            }
+          }
+          if (patch.startISO != null && s.length >= 10) {
+            const au = getAsgariUcretByDate(s);
+            if (au != null) next.brut = au * 2;
+          }
+          const fmH = next.fmHours ?? r.fmHours ?? 0;
+          const { fm, net } = recalcYeraltiFmNet(next, fmH, katSayi || 1);
+          return {
+            ...next,
+            fm,
+            net,
+            ...(patch.fmHours != null ? { fmManual: true } : {}),
+          };
+        })
+      );
+    },
+    [katSayi]
+  );
+
+  const addYeraltiRow = useCallback(
+    (afterRowId?: string) => {
+      const newRow: YeraltiPeriodRow = {
+        id: genYeraltiRowId(),
+        startISO: "",
+        endISO: "",
+        rangeLabel: "",
+        weeks: 0,
+        brut: 0,
+        katsayi: katSayi || 1,
+        fmHours: 0,
+        fm: 0,
+        net: 0,
+        isManual: true,
+      };
+      setRows((prev) => {
+        if (!afterRowId) return [...prev, newRow];
+        const i = prev.findIndex((r) => r.id === afterRowId);
+        if (i < 0) return [...prev, newRow];
+        return [...prev.slice(0, i + 1), newRow, ...prev.slice(i + 1)];
+      });
+    },
+    [katSayi]
+  );
+
+  const removeYeraltiRow = useCallback((rowId: string) => {
+    setRows((prev) => prev.filter((r) => r.id !== rowId));
+  }, []);
 
   const handleSave = useCallback(() => {
     kaydetAc({
@@ -432,8 +704,11 @@ export default function YeraltiIsciPage() {
     });
 
     const cetvelHeaders = ["Dönem", "Hafta", "Ücret (2×AU)", "Katsayı", "FM Saat", "187,5", "2", "Fazla Mesai"];
-    const cetvelRows = rows.map((r) => [
-      `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}`,
+    const cetvelRows = rows.map((r) => {
+      const periodLabel = `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}`;
+      const periodWithNote = r.yillikIzinAciklama ? `${periodLabel} ${r.yillikIzinAciklama}` : periodLabel;
+      return [
+      periodWithNote,
       r.weeks ?? 0,
       fmt(r.brut ?? 0),
       r.katsayi ?? 1,
@@ -441,7 +716,8 @@ export default function YeraltiIsciPage() {
       "187,5",
       "2",
       fmt(r.fm ?? 0),
-    ]);
+    ];
+    });
     cetvelRows.push(["", "", "", "", "", "", "Toplam", fmt(totalBrut)]);
     const n2 = adaptToWordTable({ headers: cetvelHeaders, rows: cetvelRows });
     s.push({
@@ -484,11 +760,11 @@ export default function YeraltiIsciPage() {
       htmlForPdf: buildStyledReportTable(n3.headers, n3.rows, { lastRowBg: "green" }),
     });
 
-    if (mahsupNum > 0) {
+    {
       const mahsupRows: { label: string; value: string }[] = [
         { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
         { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
-        { label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` },
+        ...(mahsupNum > 0 ? [{ label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` }] : []),
         { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
       ];
       const n4 = adaptToWordTable(mahsupRows);
@@ -575,7 +851,7 @@ export default function YeraltiIsciPage() {
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
               <h2 className={sectionTitleCls}>Davacı Tarih ve Saat Bilgileri</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2 items-start">
                 <div>
                   <label className={labelCls}>İşe Giriş</label>
                   <input
@@ -616,8 +892,6 @@ export default function YeraltiIsciPage() {
                     ))}
                   </select>
                 </div>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                 <div>
                   <label className={labelCls}>Giriş Saati</label>
                   <input
@@ -635,6 +909,27 @@ export default function YeraltiIsciPage() {
                     onChange={(e) => handleFormChange({ davaci: { ...davaci, out: e.target.value } })}
                     className={inputCls}
                   />
+                </div>
+                <div>
+                  <label className={labelCls}>Hafta Tatili Hangi Gün? (opsiyonel)</label>
+                  <select
+                    value={haftaTatiliGunu === "" || haftaTatiliGunu == null ? "" : String(haftaTatiliGunu)}
+                    onChange={(e) =>
+                      handleFormChange({
+                        haftaTatiliGunu: e.target.value === "" ? "" : Number(e.target.value),
+                      })
+                    }
+                    className={inputCls}
+                  >
+                    <option value="">Seçilmedi</option>
+                    <option value="1">Pazartesi</option>
+                    <option value="2">Salı</option>
+                    <option value="3">Çarşamba</option>
+                    <option value="4">Perşembe</option>
+                    <option value="5">Cuma</option>
+                    <option value="6">Cumartesi</option>
+                    <option value="0">Pazar</option>
+                  </select>
                 </div>
               </div>
             </section>
@@ -859,14 +1154,35 @@ export default function YeraltiIsciPage() {
               </div>
             </section>
 
-            <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+            <div className="space-y-3">
+              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+              <UbgtFmDayPicker
+                rangeStart={ubgtFmCatalogRange.start}
+                rangeEnd={ubgtFmCatalogRange.end}
+                exclusions={exclusions}
+                setExclusions={setExclusions}
+                showToastError={showToastError}
+              />
+            </div>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla Mesai Cetveli (Yeraltı)</h2>
               </div>
+              <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
               <div className="overflow-x-auto">
-                <table className="w-full text-xs border-collapse font-sans table-fixed" style={{ minWidth: "640px" }}>
+                <table className="w-full text-xs border-collapse font-sans table-fixed text-gray-900 dark:text-gray-100" style={{ minWidth: "720px" }}>
+                  <colgroup>
+                    <col style={{ width: "28%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "6%" }} />
+                  </colgroup>
                   <thead>
                     <tr className="bg-gray-100 dark:bg-gray-700">
                       <th className="px-2 py-1.5 text-left border border-gray-200 dark:border-gray-600 font-semibold">Dönem</th>
@@ -877,24 +1193,86 @@ export default function YeraltiIsciPage() {
                       <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">187,5</th>
                       <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">2</th>
                       <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">FM Tutarı</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-gray-600 w-14" aria-label="Satır ekle/çıkar" />
                     </tr>
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500">
+                        <td colSpan={9} className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500">
                           İşe giriş/çıkış, davacı saatleri ve tanık aralıklarını girin.
                         </td>
                       </tr>
                     ) : (
-                      rows.map((r, i) => (
-                        <tr key={`${r.startISO}-${r.endISO}-${i}`} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600">
-                            {formatDateTR(r.startISO)} – {formatDateTR(r.endISO)}
+                      rows.map((r) => (
+                        <tr key={r.id || `${r.startISO}-${r.endISO}`} className="group hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600 align-top">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="date"
+                                value={r.startISO?.slice(0, 10) ?? ""}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  applyYeraltiRowPatch(r.id!, { startISO: raw ? clampToLastDayOfMonth(raw) : "" });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                              <span className="text-gray-400 shrink-0">–</span>
+                              <input
+                                type="date"
+                                value={r.endISO?.slice(0, 10) ?? ""}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  applyYeraltiRowPatch(r.id!, { endISO: raw ? clampToLastDayOfMonth(raw) : "" });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                            </div>
+                            {r.yillikIzinAciklama ? (
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                {r.yillikIzinAciklama}
+                              </div>
+                            ) : null}
                           </td>
-                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">{r.weeks}</td>
-                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">{fmt(r.brut)}</td>
-                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">{r.katsayi ?? 1}</td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={r.weeks ?? 0}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value, 10);
+                                applyYeraltiRowPatch(r.id!, { weeks: Number.isNaN(v) ? 0 : Math.max(0, v) });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={r.brut ?? 0}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value.replace(",", "."));
+                                applyYeraltiRowPatch(r.id!, { brut: Number.isNaN(v) ? 0 : Math.max(0, v) });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.0001}
+                              value={r.katsayi ?? 1}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value.replace(",", "."));
+                                applyYeraltiRowPatch(r.id!, { katsayi: Number.isNaN(v) || v <= 0 ? 1 : v });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
                           <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
                             <input
                               type="number"
@@ -903,14 +1281,34 @@ export default function YeraltiIsciPage() {
                               value={r.fmHours ?? 0}
                               onChange={(e) => {
                                 const v = parseFloat(e.target.value.replace(",", "."));
-                                if (!Number.isNaN(v)) updateRowFmHours(i, Math.max(0, v));
+                                if (!Number.isNaN(v)) updateRowFmHours(r.id!, Math.max(0, v));
                               }}
                               className={tableInputCls}
                             />
                           </td>
                           <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">187,5</td>
                           <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">2</td>
-                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right font-medium">{fmt(r.fm)}</td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right font-medium">{fmt(Number(r.fm) || 0)}</td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600 align-middle">
+                            <div className="flex items-center justify-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto">
+                              <button
+                                type="button"
+                                onClick={() => addYeraltiRow(r.id)}
+                                className="w-6 h-6 rounded flex items-center justify-center text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/40 font-medium"
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeYeraltiRow(r.id!)}
+                                disabled={rows.length <= 1}
+                                className="w-6 h-6 rounded flex items-center justify-center text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 font-medium"
+                                title={rows.length <= 1 ? "En az 1 satır kalmalı" : "Satırı sil"}
+                              >
+                                −
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -919,6 +1317,7 @@ export default function YeraltiIsciPage() {
                         <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600">Toplam</td>
                         <td colSpan={6} className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
                         <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600 text-right">{fmtCurrency(totalBrut)}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
                       </tr>
                     )}
                   </tbody>

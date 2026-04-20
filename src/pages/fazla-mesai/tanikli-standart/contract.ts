@@ -10,6 +10,10 @@ export interface Witness {
   dateOut: string;
   in: string;
   out: string;
+  /** Boş = davacı ile aynı (yalnızca FM / metin; yıllık izin davacı haftasına bağlı kalır). */
+  weeklyDays?: number | string | "";
+  /** Haftada 7 gün seçiliyken FM hesabı için. */
+  sevenDayMode?: "tatilsiz" | "tatilli";
 }
 
 export interface DavaciBeyan {
@@ -38,6 +42,7 @@ export interface FormValues {
   iseGiris: string;
   istenCikis: string;
   weeklyDays: number | string;
+  haftaTatiliGunu?: number | "";
   davaci: DavaciBeyan;
   taniklar: Witness[];
   mode270: Mode270;

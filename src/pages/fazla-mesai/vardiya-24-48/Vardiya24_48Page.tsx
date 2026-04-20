@@ -13,7 +13,9 @@ import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
 import { apiClient, apiPost } from "@/utils/apiClient";
 import { buildWordTable, adaptToWordTable, copySectionForWord } from "@modules/fazla-mesai/shared";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
+import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
+import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
 import { NotlarAccordion } from "../standart/NotlarAccordion";
@@ -23,13 +25,13 @@ import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { useTanikliStandartState } from "../tanikli-standart/state";
 import { fmt, fmtCurrency } from "../standart/calculations";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
+import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 
 const REDIRECT_BASE = "/fazla-mesai/vardiya-24-48";
 const RECORD_24 = "fazla_mesai_vardiya_24";
 const RECORD_48 = "fazla_mesai_vardiya_48";
 const HAFTALIK_MESAI_24 = 10.5;
 const HAFTALIK_MESAI_48 = 7.5;
-const GELIR_VERGISI_BIRINCI_DILIM_ORANI = 0.15;
 
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-transparent";
@@ -223,6 +225,21 @@ export default function Vardiya24_48Page() {
 
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
 
+  const ubgtFmCatalogRange = useMemo(() => {
+    const dIn = (iseGiris || davaci?.dateIn || "").slice(0, 10);
+    const dOut = (istenCikis || davaci?.dateOut || "").slice(0, 10);
+    let start = dIn;
+    let end = dOut;
+    for (const t of taniklar) {
+      const a = (t.dateIn || "").slice(0, 10);
+      const b = (t.dateOut || "").slice(0, 10);
+      if (a && (!start || a < start)) start = a;
+      if (b && (!end || b > end)) end = b;
+    }
+    if (!start || !end || start > end) return { start: "", end: "" };
+    return { start, end };
+  }, [iseGiris, istenCikis, davaci?.dateIn, davaci?.dateOut, taniklar]);
+
   const handleFormChange = useCallback(
     (updates: Partial<typeof formValues>) => {
       setFormValues((p) => {
@@ -359,17 +376,23 @@ export default function Vardiya24_48Page() {
 
   const totalBrut = useMemo(() => rows.reduce((a, r) => a + (r.fm || 0), 0), [rows]);
 
+  const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
     if (totalBrut <= 0) return { gelirVergisi: 0, damgaVergisi: 0, netYillik: 0, gelirVergisiDilimleri: "" };
     const sgk = Math.round(totalBrut * SSK_ORAN * 100) / 100;
     const issizlik = Math.round(totalBrut * ISSIZLIK_ORAN * 100) / 100;
-    const sskPrim = totalBrut * 0.15;
-    const matrah = Math.max(0, totalBrut - sskPrim);
-    const gelirVergisi = Math.round(matrah * GELIR_VERGISI_BIRINCI_DILIM_ORANI * 100) / 100;
+    const matrah = Math.max(0, totalBrut - sgk - issizlik);
+    const gvResult = calculateIncomeTaxWithBrackets(exitYear, matrah);
+    const gelirVergisi = Math.round(gvResult.tax * 100) / 100;
     const damgaVergisi = Math.round(totalBrut * DAMGA_VERGISI_ORANI * 100) / 100;
     const netYillik = Math.round((totalBrut - sgk - issizlik - gelirVergisi - damgaVergisi) * 100) / 100;
-    return { gelirVergisi, damgaVergisi, netYillik, gelirVergisiDilimleri: "(%15)" };
-  }, [totalBrut]);
+    return {
+      gelirVergisi,
+      damgaVergisi,
+      netYillik,
+      gelirVergisiDilimleri: gvResult.brackets,
+    };
+  }, [totalBrut, exitYear]);
 
   const mahsupNum = useMemo(() => {
     const s = String(mahsuplasmaMiktari || "").replace(/\./g, "").replace(",", ".");
@@ -476,8 +499,23 @@ export default function Vardiya24_48Page() {
       html: buildWordTable(n3.headers, n3.rows),
       htmlForPdf: buildStyledReportTable(n3.headers, n3.rows, { lastRowBg: "green" }),
     });
+    {
+      const mahsupRows: { label: string; value: string }[] = [
+        { label: "Toplam Fazla Mesai (Brüt)", value: fmtCurrency(totalBrut) },
+        { label: "1/3 Hakkaniyet İndirimi", value: `-${fmtCurrency(hakkaniyetIndirimi)}` },
+        ...(mahsupNum > 0 ? [{ label: "Mahsuplaşma Miktarı", value: `-${fmtCurrency(mahsupNum)}` }] : []),
+        { label: "Son Net Alacak", value: fmtCurrency(sonNet) },
+      ];
+      const n4 = adaptToWordTable(mahsupRows);
+      s.push({
+        id: "mahsup",
+        title: "Mahsuplaşma",
+        html: buildWordTable(n4.headers, n4.rows),
+        htmlForPdf: buildStyledReportTable(n4.headers, n4.rows, { lastRowBg: "green" }),
+      });
+    }
     return s;
-  }, [iseGiris, istenCikis, diff.label, vardiyaMode, rows, totalBrut, brutNetResult]);
+  }, [iseGiris, istenCikis, diff.label, vardiyaMode, rows, totalBrut, brutNetResult, hakkaniyetIndirimi, mahsupNum, sonNet]);
 
   const handlePrint = useCallback(() => {
     const el = document.getElementById("report-content-vardiya");
@@ -708,14 +746,24 @@ export default function Vardiya24_48Page() {
               )}
             </section>
 
-            <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+            <div className="space-y-3">
+              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+              <UbgtFmDayPicker
+                rangeStart={ubgtFmCatalogRange.start}
+                rangeEnd={ubgtFmCatalogRange.end}
+                exclusions={exclusions}
+                setExclusions={setExclusions}
+                showToastError={showToastError}
+              />
+            </div>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla mesai cetveli</h2>
               </div>
+              <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
               <div className="overflow-x-auto p-2">
-                <table className="w-full text-xs border-collapse min-w-[720px]">
+                <table className="w-full text-xs border-collapse min-w-[720px] text-gray-900 dark:text-gray-100">
                   <thead>
                     <tr className="bg-gray-100 dark:bg-gray-700">
                       <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-left">Dönem</th>
