@@ -33,7 +33,11 @@ function getRouteForType(type: string): string {
   if (t.includes("donemsel") && t.includes("haftalik")) return "/fazla-mesai/donemsel-haftalik";
   if (t.includes("donemsel")) return "/fazla-mesai/donemsel";
   if (t.includes("yeralti")) return "/fazla-mesai/yeralti-isci";
-  if (t.includes("vardiya_24") || t.includes("vardiya-24") || t.includes("vardiya_48") || t.includes("vardiya-48")) return "/fazla-mesai/vardiya-24-48";
+  if (t.includes("vardiya_48") || t.includes("vardiya-48")) return "/fazla-mesai/vardiya-48";
+  if (t.includes("vardiya_24") || t.includes("vardiya-24")) return "/fazla-mesai/vardiya-24";
+  if (t.includes("fazla_mesai_gemi_7_24") || t.includes("gemi_7_24") || t.includes("gemi-7-24")) {
+    return "/fazla-mesai/gemi-7-24";
+  }
   if (t.includes("fazla_mesai_gemi") || (t.includes("gemi") && t.includes("fazla"))) return "/fazla-mesai/gemi-adami";
   if (t.includes("fazla_mesai") || t === "fazla_mesai") return "/fazla-mesai/standart";
   if (t.includes("ubgt") && t.includes("bilirkisi")) return "/ubgt-bilirkisi";
@@ -58,6 +62,9 @@ function getRouteForType(type: string): string {
   if (t.includes("yillik_izin") && t.includes("borclar")) return "/yillik-izin/borclar";
   if (t.includes("yillik_izin") && t.includes("gemi")) return "/yillik-izin/gemi";
   if (t.includes("yillik_izin") && t.includes("mevsim")) return "/yillik-izin/mevsim";
+  if (t.includes("yillik_izin") && t.includes("basin") && (t.includes("gunluk_olmayan") || t.includes("günlük_olmayan"))) {
+    return "/yillik-izin/basin/gunluk-olmayan";
+  }
   if (t.includes("yillik_izin") && t.includes("basin")) return "/yillik-izin/basin";
   if (t.includes("yillik_izin") && t.includes("belirli")) return "/yillik-izin/belirli";
   if (t.includes("yillik_izin") && t.includes("kismi")) return "/yillik-izin/kismi";

@@ -16,10 +16,16 @@ import {
   calcSectionTitleCls,
   calcSectionBoxCls,
   calcHelperTextCls,
+  calcDataTableWrapCls,
+  calcDataTableCls,
+  calcDataTableHeadRowCls,
+  calcDataTableHeadCellCls,
+  calcDataTableCellCls,
+  calcDataTableFootRowCls,
 } from "@/shared/calcPageFormStyles";
 // Constants - inline (UBGT)
 const PAGE_TITLE = "UBGT Alacağı";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | UBGT Alacağı";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | UBGT Alacağı";
 
 // Tatil dosyaları backend'e taşındı
 import UbgtExpiryBox from "./ubgt-standart/UbgtExpiryBox";
@@ -217,6 +223,21 @@ function getUbgtDaysForPeriod(
   return ubgtDays;
 }
 
+function parseTRDateToISO(value: string): string {
+  const v = (value || "").trim();
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(v);
+  if (!m) return "";
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+function extractPeriodISO(period: string): { startISO: string; endISO: string } {
+  const [startPart, endPart] = String(period || "").split("-").map((s) => s.trim());
+  return {
+    startISO: parseTRDateToISO(startPart || ""),
+    endISO: parseTRDateToISO(endPart || ""),
+  };
+}
+
 // Tablo satırı tipi
 export interface UbgtTableRow {
   period: string;
@@ -229,6 +250,16 @@ export interface UbgtTableRow {
   endISO?: string;
   manual?: boolean;
 }
+
+const WEEKDAYS: { index: number; label: string }[] = [
+  { index: 0, label: "Pazar" },
+  { index: 1, label: "Pazartesi" },
+  { index: 2, label: "Salı" },
+  { index: 3, label: "Çarşamba" },
+  { index: 4, label: "Perşembe" },
+  { index: 5, label: "Cuma" },
+  { index: 6, label: "Cumartesi" },
+];
 
 export default function UbgtStandartPage() {
   const navigate = useNavigate();
@@ -268,6 +299,10 @@ export default function UbgtStandartPage() {
 
   // Yıl aralığı bazlı UBGT günü dışlama kuralları
   const [ubgtExclusionRules, setUbgtExclusionRules] = useState<UbgtExclusionRule[]>([]);
+  const [excludedWeekdays, setExcludedWeekdays] = useState<number[]>([]);
+  const [backendExcludedList, setBackendExcludedList] = useState<
+    Array<{ date: string; name: string; duration: number; dayOfWeek: number }>
+  >([]);
   const [loadingFromSave, setLoadingFromSave] = useState(false);
 
   // Yeni tarih aralığı ekle
@@ -353,6 +388,10 @@ export default function UbgtStandartPage() {
     }
   };
 
+  const handleWeekdayExclude = (weekday: number, checked: boolean) => {
+    setExcludedWeekdays((prev) => (checked ? [...prev, weekday] : prev.filter((d) => d !== weekday)));
+  };
+
   // Seçili tatillerin toplam gün sayısı
   // totalDays artık useState olarak tanımlandı ve backend'den geliyor
 
@@ -422,6 +461,14 @@ export default function UbgtStandartPage() {
           formData.ubgtExclusionRules ||
           formData.data?.form?.ubgtExclusionRules ||
           formData.form?.ubgtExclusionRules;
+        const rawExcludedWeekdays =
+          formData.excludedWeekdays ||
+          formData.data?.form?.excludedWeekdays ||
+          formData.form?.excludedWeekdays;
+        const excludedWeekdayHolidaysForm =
+          formData.excludedWeekdayHolidays ||
+          formData.data?.form?.excludedWeekdayHolidays ||
+          formData.form?.excludedWeekdayHolidays;
         const zamanasimi =
           formData.zamanasimi || formData.data?.form?.zamanasimi || formData.form?.zamanasimi;
         const periods = formData.periods || formData.data?.form?.periods || formData.form?.periods;
@@ -441,6 +488,15 @@ export default function UbgtStandartPage() {
           setUbgtExclusionRules(ubgtExclusionRulesForm);
         } else if (excludedUbgtHolidaysForm && Array.isArray(excludedUbgtHolidaysForm) && excludedUbgtHolidaysForm.length > 0) {
           setUbgtExclusionRules([{ startYear: 2000, endYear: 2100, excludedHolidayTypes: excludedUbgtHolidaysForm }]);
+        }
+        if (Array.isArray(rawExcludedWeekdays)) {
+          const loadedExcludedWeekdays = rawExcludedWeekdays
+            .map((d) => Number(d))
+            .filter((n) => !Number.isNaN(n) && n >= 0 && n <= 6);
+          setExcludedWeekdays(loadedExcludedWeekdays);
+        }
+        if (Array.isArray(excludedWeekdayHolidaysForm)) {
+          setBackendExcludedList(excludedWeekdayHolidaysForm);
         }
         if (zamanasimi?.start) {
           setUbgtExpiryStart(zamanasimi.start);
@@ -554,11 +610,13 @@ export default function UbgtStandartPage() {
     }
 
     try {
+      setBackendExcludedList([]);
       const payload = {
         dateRanges,
         selectedHolidayIds, // Boş olabilir, backend 0 gün olarak hesaplar
         ubgtExcludedDays,
         ubgtExpiryStart,
+        excludedWeekdays,
         year: new Date().getFullYear()
       };
       console.log("[UBGT] Backend'e gönderiliyor:", JSON.stringify(payload, null, 2));
@@ -580,6 +638,7 @@ export default function UbgtStandartPage() {
       if (result.success && result.data) {
         const periods = result.data.periods || [];
         const ubgtDayEntries = result.data.ubgtDayEntries || [];
+        setBackendExcludedList(result.data.excludedWeekdayHolidays || []);
         // Tarih değişince yeniden hesaplamada kullanıcının girdiği kat sayıyı koru
         const currentKatsayi = hasCustomKatsayi && ubgtRows.length > 0 ? (ubgtRows[0].coefficient ?? 1) : undefined;
         const periodsWithKatsayi = currentKatsayi !== undefined
@@ -681,7 +740,7 @@ export default function UbgtStandartPage() {
       return () => clearTimeout(timeoutId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRanges, selectedHolidayIds, ubgtExcludedDays, ubgtExpiryStart, ubgtExclusionRules]);
+  }, [dateRanges, selectedHolidayIds, ubgtExcludedDays, ubgtExpiryStart, ubgtExclusionRules, excludedWeekdays]);
 
   const handleSave = () => {
     try {
@@ -718,6 +777,8 @@ export default function UbgtStandartPage() {
         zamanasimi: { active: !!ubgtExpiryStart, start: ubgtExpiryStart },
         excludedDays: ubgtExcludedDays,
         ubgtExclusionRules,
+        excludedWeekdays,
+        excludedWeekdayHolidays: backendExcludedList,
         startDate: startDateStr,
         endDate: endDateStr,
         notes: "",
@@ -734,6 +795,8 @@ export default function UbgtStandartPage() {
               selectedHolidays: selectedHolidayIds,
               excludedDays: ubgtExcludedDays,
               ubgtExclusionRules,
+              excludedWeekdays,
+              excludedWeekdayHolidays: backendExcludedList,
               zamanasimi: { active: !!ubgtExpiryStart, start: ubgtExpiryStart },
               periods: ubgtRows,
               katsayi,
@@ -782,6 +845,8 @@ export default function UbgtStandartPage() {
       setUbgtExpiryStart(null);
       setUbgtExcludedDays([]);
       setUbgtExclusionRules([]);
+      setExcludedWeekdays([]);
+      setBackendExcludedList([]);
       setUbgtRows([]);
       setUbgtMahsuplasamaData({});
       setCurrentRecordName(null);
@@ -1126,6 +1191,39 @@ export default function UbgtStandartPage() {
             totalDays={totalDays}
           />
 
+          <section className={calcSectionBoxCls}>
+            <h2 className={calcSectionTitleCls}>Hafta günü dışlama</h2>
+            <p className={calcHelperTextCls}>
+              İşaretlenen hafta günlerine denk gelen resmi tatiller UBGT hesabına dahil edilmez.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              {WEEKDAYS.map((day) => (
+                <label key={day.index} className="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300"
+                    checked={excludedWeekdays.includes(day.index)}
+                    onChange={(e) => handleWeekdayExclude(day.index, e.target.checked)}
+                  />
+                  {day.label}
+                </label>
+              ))}
+            </div>
+          </section>
+
+          {backendExcludedList.length > 0 && (
+            <section className={`${calcSectionBoxCls} border-amber-200/80 dark:border-amber-800/50`}>
+              <h2 className={calcSectionTitleCls}>Hafta tatili nedeniyle dışlanan tatiller</h2>
+              <ul className="mt-2 text-xs text-gray-600 dark:text-gray-400 space-y-1 max-h-40 overflow-y-auto">
+                {backendExcludedList.map((item, idx) => (
+                  <li key={`${item.date}-${item.name}-${idx}`}>
+                    {item.date} — {item.name} ({item.duration} gün)
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* Dışlanabilir Günler */}
           <UbgtExcludeDays
             ubgtExcludedDays={ubgtExcludedDays}
@@ -1197,29 +1295,26 @@ export default function UbgtStandartPage() {
                 </div>
               )}
               {ubgtRows.length > 0 ? (
-                <div className="w-full overflow-x-auto">
-                  <table
-                    className="w-full border-collapse text-xs text-gray-900 dark:text-gray-100"
-                    style={{ border: "1px solid #d2d2d2" }}
-                  >
+                <div className={calcDataTableWrapCls}>
+                  <table className={calcDataTableCls}>
                     <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-800">
-                        <th className="text-left text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                      <tr className={calcDataTableHeadRowCls}>
+                        <th className={`${calcDataTableHeadCellCls} text-left`}>
                           Tarih (Ücret Dönemi)
                         </th>
-                        <th className="text-right text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <th className={`${calcDataTableHeadCellCls} text-right`}>
                           Ücret (BRÜT)
                         </th>
-                        <th className="text-center text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <th className={`${calcDataTableHeadCellCls} text-center`}>
                           Katsayı
                         </th>
-                        <th className="text-right text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <th className={`${calcDataTableHeadCellCls} text-right`}>
                           Günlük Brüt Ücret
                         </th>
-                        <th className="text-right text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <th className={`${calcDataTableHeadCellCls} text-right`}>
                           UBGT Günleri
                         </th>
-                        <th className="text-right text-xs font-semibold text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <th className={`${calcDataTableHeadCellCls} text-right`}>
                           UBGT Ücreti
                         </th>
                         <th className="border-0 bg-transparent w-16"></th>
@@ -1233,62 +1328,56 @@ export default function UbgtStandartPage() {
                           onMouseEnter={() => setHoveredRow(index)}
                           onMouseLeave={() => setHoveredRow(null)}
                         >
-                          <td className="text-xs text-gray-900 dark:text-gray-100" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
-                            {row.manual ? (
-                              <div className="flex gap-1 items-center">
-                                <input
-                                  type="date"
-                                  value={row.startISO || ""}
-                                  onChange={(e) => {
-                                    const newStart = e.target.value;
-                                    setUbgtRows((prev) => prev.map((r, i) => {
-                                      if (i !== index) return r;
-                                      const endISO = r.endISO || "";
-                                      // Yeni period string'i oluştur
-                                      const startFormatted = newStart ? new Date(newStart).toLocaleDateString("tr-TR") : "";
-                                      const endFormatted = endISO ? new Date(endISO).toLocaleDateString("tr-TR") : "";
-                                      const newPeriod = startFormatted && endFormatted ? `${startFormatted}-${endFormatted}` : r.period;
-                                      // UBGT günlerini yeniden hesapla
-                                      let newUbgtDays = r.ubgtDays;
-                                      if (newStart && endISO) {
-                                        newUbgtDays = getUbgtDaysForPeriod(newStart, endISO, selectedHolidayIds, ubgtExcludedDays);
-                                      }
-                                      const ubgtTotal = Number((r.dailyWage * newUbgtDays).toFixed(2));
-                                      return { ...r, startISO: newStart, period: newPeriod, ubgtDays: newUbgtDays, ubgtTotal };
-                                    }));
-                                  }}
-                                  className={`${calcTableInputCls} w-[7.5rem]`}
-                                />
-                                <span>-</span>
-                                <input
-                                  type="date"
-                                  value={row.endISO || ""}
-                                  onChange={(e) => {
-                                    const newEnd = e.target.value;
-                                    setUbgtRows((prev) => prev.map((r, i) => {
-                                      if (i !== index) return r;
-                                      const startISO = r.startISO || "";
-                                      // Yeni period string'i oluştur
-                                      const startFormatted = startISO ? new Date(startISO).toLocaleDateString("tr-TR") : "";
-                                      const endFormatted = newEnd ? new Date(newEnd).toLocaleDateString("tr-TR") : "";
-                                      const newPeriod = startFormatted && endFormatted ? `${startFormatted}-${endFormatted}` : r.period;
-                                      // UBGT günlerini yeniden hesapla
-                                      let newUbgtDays = r.ubgtDays;
-                                      if (startISO && newEnd) {
-                                        newUbgtDays = getUbgtDaysForPeriod(startISO, newEnd, selectedHolidayIds, ubgtExcludedDays);
-                                      }
-                                      const ubgtTotal = Number((r.dailyWage * newUbgtDays).toFixed(2));
-                                      return { ...r, endISO: newEnd, period: newPeriod, ubgtDays: newUbgtDays, ubgtTotal };
-                                    }));
-                                  }}
-                                  className={`${calcTableInputCls} w-[7.5rem]`}
-                                />
-                              </div>
-                            ) : (
-                              row.period
-                            )}
+                          <td className={`${calcDataTableCellCls} text-left`}>
+                            <div className="flex gap-1 items-center">
+                              <input
+                                type="date"
+                                value={row.startISO || extractPeriodISO(row.period).startISO}
+                                onChange={(e) => {
+                                  const newStart = e.target.value;
+                                  setUbgtRows((prev) => prev.map((r, i) => {
+                                    if (i !== index) return r;
+                                    const inferred = extractPeriodISO(r.period);
+                                    const endISO = r.endISO || inferred.endISO;
+                                    const startFormatted = newStart ? new Date(newStart).toLocaleDateString("tr-TR") : "";
+                                    const endFormatted = endISO ? new Date(endISO).toLocaleDateString("tr-TR") : "";
+                                    const newPeriod = startFormatted && endFormatted ? `${startFormatted}-${endFormatted}` : r.period;
+                                    let newUbgtDays = r.ubgtDays;
+                                    if (newStart && endISO) {
+                                      newUbgtDays = getUbgtDaysForPeriod(newStart, endISO, selectedHolidayIds, ubgtExcludedDays);
+                                    }
+                                    const ubgtTotal = Number((r.dailyWage * (newUbgtDays ?? 0)).toFixed(2));
+                                    return { ...r, manual: true, startISO: newStart, endISO, period: newPeriod, ubgtDays: newUbgtDays, ubgtTotal };
+                                  }));
+                                }}
+                                className={`${calcTableInputCls} w-[7.2rem]`}
+                              />
+                              <span>-</span>
+                              <input
+                                type="date"
+                                value={row.endISO || extractPeriodISO(row.period).endISO}
+                                onChange={(e) => {
+                                  const newEnd = e.target.value;
+                                  setUbgtRows((prev) => prev.map((r, i) => {
+                                    if (i !== index) return r;
+                                    const inferred = extractPeriodISO(r.period);
+                                    const startISO = r.startISO || inferred.startISO;
+                                    const startFormatted = startISO ? new Date(startISO).toLocaleDateString("tr-TR") : "";
+                                    const endFormatted = newEnd ? new Date(newEnd).toLocaleDateString("tr-TR") : "";
+                                    const newPeriod = startFormatted && endFormatted ? `${startFormatted}-${endFormatted}` : r.period;
+                                    let newUbgtDays = r.ubgtDays;
+                                    if (startISO && newEnd) {
+                                      newUbgtDays = getUbgtDaysForPeriod(startISO, newEnd, selectedHolidayIds, ubgtExcludedDays);
+                                    }
+                                    const ubgtTotal = Number((r.dailyWage * (newUbgtDays ?? 0)).toFixed(2));
+                                    return { ...r, manual: true, startISO, endISO: newEnd, period: newPeriod, ubgtDays: newUbgtDays, ubgtTotal };
+                                  }));
+                                }}
+                                className={`${calcTableInputCls} w-[7.2rem]`}
+                              />
+                            </div>
                           </td>
-                          <td className="text-xs text-gray-900 dark:text-gray-100 text-right" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                          <td className={`${calcDataTableCellCls} text-right`}>
                             <input
                               type="text"
                               key={`wage-${index}-${row.wage}`}
@@ -1306,40 +1395,36 @@ export default function UbgtStandartPage() {
                               className={`${calcTableInputCls} border-transparent focus:border-gray-300`}
                             />
                           </td>
-                          <td className="text-xs text-gray-900 dark:text-gray-100 text-center" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                          <td className={`${calcDataTableCellCls} text-center`}>
                             {Number((row.coefficient ?? 1).toFixed(4)).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
                           </td>
-                          <td className="text-xs text-gray-900 dark:text-gray-100 text-right" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                          <td className={`${calcDataTableCellCls} text-right`}>
                             {(row.dailyWage ?? 0).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}₺
                           </td>
-                          <td className="text-xs text-gray-900 dark:text-gray-100 text-right" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
-                            {row.manual ? (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={row.ubgtDays != null ? String(row.ubgtDays) : ""}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  const newDays = v === "" ? 0 : Number(v) || 0;
-                                  setUbgtRows((prev) => prev.map((r, i) => {
-                                    if (i !== index) return r;
-                                    const ubgtTotal = Number((r.dailyWage * newDays).toFixed(2));
-                                    return { ...r, ubgtDays: newDays, ubgtTotal };
-                                  }));
-                                }}
-                                className={`${calcTableInputCls} w-16`}
-                              />
-                            ) : (
-                              <>{(row.ubgtDays ?? 0).toLocaleString("tr-TR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} gün</>
-                            )}
+                          <td className={`${calcDataTableCellCls} text-right`}>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={row.ubgtDays != null ? String(row.ubgtDays) : ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                const newDays = v === "" ? 0 : Number(v) || 0;
+                                setUbgtRows((prev) => prev.map((r, i) => {
+                                  if (i !== index) return r;
+                                  const ubgtTotal = Number((r.dailyWage * newDays).toFixed(2));
+                                  return { ...r, manual: true, ubgtDays: newDays, ubgtTotal };
+                                }));
+                              }}
+                              className={`${calcTableInputCls} w-16`}
+                            />
                           </td>
-                          <td className="text-xs font-semibold text-gray-900 dark:text-gray-100 text-right" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                          <td className={`${calcDataTableCellCls} text-right font-semibold`}>
                             {(row.ubgtTotal ?? 0).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}₺
                           </td>
                           {/* Satır ekleme ve silme butonları - sadece hover'da görünür */}
                           <td className="border-0 bg-transparent w-16 p-0">
                             {hoveredRow === index && (
-                              <div className="flex gap-1 justify-center items-center">
+                              <div className="flex gap-2 justify-center items-center">
                                 <span
                                   className="row-add-icon text-orange-500 hover:text-orange-600 cursor-pointer text-sm leading-none"
                                   onClick={() => duplicateRow(index)}
@@ -1365,15 +1450,14 @@ export default function UbgtStandartPage() {
                       ))}
                     </tbody>
                     <tfoot>
-                      <tr className="bg-gray-50 dark:bg-gray-800 font-semibold">
+                      <tr className={calcDataTableFootRowCls}>
                         <td
                           colSpan={5}
-                          className="text-gray-900 dark:text-gray-100 text-right"
-                          style={{ padding: "6px", border: "1px solid #d2d2d2" }}
+                          className={`${calcDataTableCellCls} text-right`}
                         >
                           Toplam UBGT Ücreti:
                         </td>
-                        <td className="text-xs text-gray-900 dark:text-gray-100 text-right" style={{ padding: "6px", border: "1px solid #d2d2d2" }}>
+                        <td className={`${calcDataTableCellCls} text-right`}>
                           {ubgtTotalBrutFromRows
                             .toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}₺
                         </td>
@@ -1501,7 +1585,7 @@ export default function UbgtStandartPage() {
               </div>
             </div>
           ),
-          onPdf: () => downloadPdfFromDOM("UBGT Alacağı Rapor", "report-content"),
+          onPdf: () => downloadPdfFromDOM("UBGT Alacağı Rapor", "ubgt-print-wrapper"),
         }}
       />
     </>

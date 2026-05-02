@@ -20,6 +20,7 @@ const initialForm: FormValues = {
   istenCikis: "",
   weeklyDays: "6",
   haftaTatiliGunu: "",
+  vardiyaWeekBucketStart: "",
   davaci: { dateIn: "", dateOut: "", in: "", out: "" },
   taniklar: [createWitness()],
   mode270: "none",

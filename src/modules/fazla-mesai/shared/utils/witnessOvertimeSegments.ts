@@ -59,6 +59,11 @@ export function buildMergedWitnessSegments(
     annualLeaveSevenDay?: "tatilli" | "tatilsiz";
   }> = [];
 
+  // Tanık öncelik kuralı:
+  // - Daha geç başlayan tanık, overlap bölgede önceliklidir.
+  // - Aynı gün başlayan tanıklarda listede sonra gelen tanık önceliklidir.
+  const witnessesWithOrder = witnesses.map((w, idx) => ({ ...w, order: idx }));
+
   for (let i = 0; i < sortedBoundaries.length - 1; i++) {
     const segStartMs = Math.max(sortedBoundaries[i], dStartMs);
     const segEndMs = Math.min(sortedBoundaries[i + 1] - DAY_MS, dEndMs);
@@ -67,14 +72,16 @@ export function buildMergedWitnessSegments(
     const segStartISO = new Date(segStartMs).toISOString().slice(0, 10);
     const segEndISO = new Date(segEndMs).toISOString().slice(0, 10);
 
-    const activeWitnesses = witnesses.filter(
+    const activeWitnesses = witnessesWithOrder.filter(
       (td) => td.startMs <= segStartMs && td.endMs >= segEndMs
     );
     if (activeWitnesses.length === 0) continue;
 
-    const best = activeWitnesses.reduce((prev, cur) =>
-      cur.fmHours > prev.fmHours ? cur : prev
-    );
+    const best = activeWitnesses.reduce((prev, cur) => {
+      if (cur.startMs > prev.startMs) return cur;
+      if (cur.startMs < prev.startMs) return prev;
+      return cur.order > prev.order ? cur : prev;
+    });
     segments.push({
       start: segStartISO,
       end: segEndISO,
@@ -88,8 +95,12 @@ export function buildMergedWitnessSegments(
   const mergedSegments: typeof segments = [];
   for (const seg of segments) {
     const last = mergedSegments[mergedSegments.length - 1];
+    const isAdjacent =
+      !!last &&
+      new Date(last.end).getTime() + DAY_MS === new Date(seg.start).getTime();
     if (
       last &&
+      isAdjacent &&
       last.fmHours === seg.fmHours &&
       last.dailyNet === seg.dailyNet &&
       (last.annualLeaveHg ?? undefined) === (seg.annualLeaveHg ?? undefined) &&

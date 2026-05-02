@@ -127,56 +127,69 @@ export function isTokenExpired(): boolean {
   return now >= (expiry - fiveMinutes);
 }
 
+/** Coalesce concurrent refresh calls (401 storms / parallel apiClient) into one request */
+let refreshInFlight: Promise<string | null> | null = null;
+
 /**
  * Refresh access token using refresh token
  */
 export async function refreshAccessToken(): Promise<string | null> {
-  const refreshToken = getRefreshToken();
-  
-  if (!refreshToken) {
-    console.error('[REFRESH TOKEN] No refresh token found in localStorage');
-    return null;
+  if (refreshInFlight) {
+    return refreshInFlight;
   }
-  
+
+  refreshInFlight = (async (): Promise<string | null> => {
+    const refreshToken = getRefreshToken();
+
+    if (!refreshToken) {
+      console.error('[REFRESH TOKEN] No refresh token found in localStorage');
+      return null;
+    }
+
+    try {
+      console.log('[REFRESH TOKEN] Attempting to refresh token...');
+      const response = await fetch(`${API_URL}/api/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[REFRESH TOKEN] Refresh failed:', response.status, errorData);
+        throw new Error(errorData.error || 'Token refresh failed');
+      }
+
+      const data = await response.json();
+
+      if (!data.accessToken || !data.refreshToken) {
+        console.error('[REFRESH TOKEN] Invalid response - missing tokens');
+        throw new Error('Invalid refresh response');
+      }
+
+      saveTokens(data.accessToken, data.refreshToken);
+
+      if (data.user) {
+        localStorage.setItem('current_user', JSON.stringify(data.user));
+        localStorage.setItem('tenant_id', String(data.user.tenantId || '1'));
+        localStorage.setItem('email', data.user.email);
+      }
+
+      console.log('[REFRESH TOKEN] Token refreshed successfully');
+      return data.accessToken;
+    } catch (error) {
+      console.error('[REFRESH TOKEN] Token refresh error:', error);
+      clearTokens();
+      return null;
+    }
+  })();
+
   try {
-    console.log('[REFRESH TOKEN] Attempting to refresh token...');
-    const response = await fetch(`${API_URL}/api/auth/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refreshToken }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('[REFRESH TOKEN] Refresh failed:', response.status, errorData);
-      throw new Error(errorData.error || 'Token refresh failed');
-    }
-    
-    const data = await response.json();
-    
-    if (!data.accessToken || !data.refreshToken) {
-      console.error('[REFRESH TOKEN] Invalid response - missing tokens');
-      throw new Error('Invalid refresh response');
-    }
-    
-    // Save new tokens
-    saveTokens(data.accessToken, data.refreshToken);
-    
-    // Update user data if provided
-    if (data.user) {
-      localStorage.setItem('current_user', JSON.stringify(data.user));
-      localStorage.setItem('tenant_id', String(data.user.tenantId || '1'));
-      localStorage.setItem('email', data.user.email);
-    }
-    
-    console.log('[REFRESH TOKEN] Token refreshed successfully');
-    return data.accessToken;
-  } catch (error) {
-    console.error('[REFRESH TOKEN] Token refresh error:', error);
-    clearTokens();
-    return null;
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
   }
 }
 

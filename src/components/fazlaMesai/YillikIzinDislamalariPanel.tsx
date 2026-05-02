@@ -34,12 +34,16 @@ function normalizeLoadedExclusions(raw: unknown): ExcludedDay[] {
       const endRaw = (item?.end ?? item?.endDate ?? "") as string;
       const start = toYYYYMMDD(startRaw);
       const end = toYYYYMMDD(endRaw);
+      const rawDays = item?.days ?? item?.gun;
+      const parsedDays =
+        typeof rawDays === "string" ? parseInt(String(rawDays).replace(",", "."), 10) : Number(rawDays);
+      const days = Number.isFinite(parsedDays) && parsedDays > 0 ? Math.floor(parsedDays) : 0;
       return {
         id: typeof item?.id === "string" ? item.id : `import-${index}-${Math.random().toString(36).slice(2)}`,
         type: (item?.type as string) ?? "Yıllık İzin",
         start,
         end,
-        days: Number(item?.days) ?? 0,
+        days,
       };
     })
     .filter((e: ExcludedDay) => e.start && e.end);

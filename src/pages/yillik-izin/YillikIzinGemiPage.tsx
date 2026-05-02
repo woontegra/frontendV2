@@ -38,7 +38,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Gemi Adamları Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Gemi Adamları Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_gemi";
 const REDIRECT_PATH = "/yillik-izin/gemi";
@@ -133,8 +133,6 @@ export default function YillikIzinGemiPage() {
   const [exclusionSaveName, setExclusionSaveName] = useState("");
   const [savedExclusionSets, setSavedExclusionSets] = useState<SavedExclusionSet[]>([]);
 
-  const [d1, setD1] = useState("");
-  const [d2, setD2] = useState("");
 
   const workPeriodDays = useMemo(() => {
     const daysMap: Record<string, number> = {};
@@ -180,19 +178,7 @@ export default function YillikIzinGemiPage() {
   const totalWorkDays = useMemo(() => calculateTotalDays(workPeriods), [workPeriods]);
   const initialBreakdown = useMemo(() => calculateGemiBreakdown(workPeriods), [workPeriods]);
 
-  useEffect(() => {
-    setD1(String(initialBreakdown.d1));
-    setD2(String(initialBreakdown.d2));
-  }, [initialBreakdown]);
-
-  const breakdown = useMemo(() => {
-    const d1Num = Number(d1) || 0;
-    const d2Num = Number(d2) || 0;
-    const total = d1Num + d2Num;
-    const y1 = d1Num > 0 ? Math.round(d1Num / 15) : 0;
-    const y2 = d2Num > 0 ? Math.round(d2Num / 30) : 0;
-    return { y1, y2, d1: d1Num, d2: d2Num, total };
-  }, [d1, d2]);
+  const breakdown = initialBreakdown;
 
   const usedTotal = useMemo(() => calculateUsedTotal(rows), [rows]);
   const remainingDays = useMemo(
@@ -411,8 +397,6 @@ export default function YillikIzinGemiPage() {
         if (form?.employerPayment != null || form?.employer_payment != null) {
           setEmployerPayment(String(form.employerPayment ?? form.employer_payment ?? ""));
         }
-        if (form?.d1 != null) setD1(String(form.d1));
-        if (form?.d2 != null) setD2(String(form.d2));
         setCurrentRecordName(res.name || null);
         success(`Kayıt yüklendi (#${effectiveId})`);
       })
@@ -817,8 +801,6 @@ export default function YillikIzinGemiPage() {
               brutUcret,
               rows,
               employerPayment,
-              d1,
-              d2,
             },
             results: {
               breakdown,
@@ -861,8 +843,6 @@ export default function YillikIzinGemiPage() {
     setBrutUcret("");
     setRows(createInitialRows(2));
     setEmployerPayment("");
-    setD1("");
-    setD2("");
     setCurrentRecordName(null);
     loadedIdRef.current = null;
     navigate(REDIRECT_PATH, { replace: true });
@@ -911,16 +891,8 @@ export default function YillikIzinGemiPage() {
         <ReportContentFromConfig config={gemiYillikReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Gemi Adamları Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Deniz İş Kanunu 40. madde — çoklu çalışma dönemi
-            </p>
-          </div>
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
           {videoLink && (
             <Button
               type="button"
@@ -1074,9 +1046,9 @@ export default function YillikIzinGemiPage() {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={d1}
-                    onChange={(e) => setD1(e.target.value)}
-                    className="w-[72px] rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm text-center font-semibold"
+                    readOnly
+                    value={String(displayBreakdown.d1 || 0)}
+                    className="w-[72px] rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-900/50 px-2 py-1 text-sm text-center font-semibold cursor-not-allowed"
                   />
                   <span>gün</span>
                 </div>
@@ -1085,9 +1057,9 @@ export default function YillikIzinGemiPage() {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={d2}
-                    onChange={(e) => setD2(e.target.value)}
-                    className="w-[72px] rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm text-center font-semibold"
+                    readOnly
+                    value={String(displayBreakdown.d2 || 0)}
+                    className="w-[72px] rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-900/50 px-2 py-1 text-sm text-center font-semibold cursor-not-allowed"
                   />
                   <span>gün</span>
                 </div>

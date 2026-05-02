@@ -32,7 +32,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Mevsimlik İşçi Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Mevsimlik İşçi Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin (Mevsimlik)";
 const RECORD_TYPE = "yillik_izin_mevsim";
 const REDIRECT_PATH = "/yillik-izin/mevsim";
@@ -102,6 +102,7 @@ export default function YillikIzinMevsimPage() {
   const { kaydetAc, isSaving } = useKaydetContext();
   const videoLink = getVideoLink("yillik-mevsimlik");
   const loadedIdRef = useRef<string | null>(null);
+  const calcReqIdRef = useRef(0);
 
   const [workPeriods, setWorkPeriods] = useState<WorkPeriod[]>([
     { id: "1", iseGiris: "", istenCikis: "" },
@@ -197,18 +198,21 @@ export default function YillikIzinMevsimPage() {
 
   useEffect(() => {
     const run = async () => {
+      const rid = ++calcReqIdRef.current;
       try {
         if (!iseGiris || !istenCikis) {
-          setBreakdown({ y1: 0, y2: 0, y3: 0, d1: 0, d2: 0, d3: 0, total: 0 });
-          setUsedTotal(0);
-          setRemainingDays(0);
-          setBrutIzin(0);
-          setSgk(0);
-          setIssizlik(0);
-          setGelirVergisi(0);
-          setGelirVergisiDilimleri("");
-          setDamgaVergisi(0);
-          setNetIzin(0);
+          if (rid === calcReqIdRef.current) {
+            setBreakdown({ y1: 0, y2: 0, y3: 0, d1: 0, d2: 0, d3: 0, total: 0 });
+            setUsedTotal(0);
+            setRemainingDays(0);
+            setBrutIzin(0);
+            setSgk(0);
+            setIssizlik(0);
+            setGelirVergisi(0);
+            setGelirVergisiDilimleri("");
+            setDamgaVergisi(0);
+            setNetIzin(0);
+          }
           return;
         }
 
@@ -239,19 +243,29 @@ export default function YillikIzinMevsimPage() {
         }
 
         const result = await response.json();
-        if (result.success && result.data) {
+        if (result.success && result.data && rid === calcReqIdRef.current) {
           setBreakdown(
             result.data.breakdown || { y1: 0, y2: 0, y3: 0, d1: 0, d2: 0, d3: 0, total: 0 }
           );
           setUsedTotal(result.data.usedTotal || 0);
           setRemainingDays(result.data.remainingDays || 0);
-          setBrutIzin(result.data.brutIzin || 0);
-          setSgk(result.data.sgk || 0);
-          setIssizlik(result.data.issizlik || 0);
-          setGelirVergisi(result.data.gelirVergisi || 0);
-          setGelirVergisiDilimleri(result.data.gelirVergisiDilimleri || "");
-          setDamgaVergisi(result.data.damgaVergisi || 0);
-          setNetIzin(result.data.netIzin || 0);
+          if (brutUcret && Number(String(brutUcret).replace(/\./g, "").replace(",", ".")) > 0) {
+            setBrutIzin(result.data.brutIzin || 0);
+            setSgk(result.data.sgk || 0);
+            setIssizlik(result.data.issizlik || 0);
+            setGelirVergisi(result.data.gelirVergisi || 0);
+            setGelirVergisiDilimleri(result.data.gelirVergisiDilimleri || "");
+            setDamgaVergisi(result.data.damgaVergisi || 0);
+            setNetIzin(result.data.netIzin || 0);
+          } else {
+            setBrutIzin(0);
+            setSgk(0);
+            setIssizlik(0);
+            setGelirVergisi(0);
+            setGelirVergisiDilimleri("");
+            setDamgaVergisi(0);
+            setNetIzin(0);
+          }
         } else if (result.error) {
           showToastError(result.error);
         }
@@ -970,16 +984,8 @@ export default function YillikIzinMevsimPage() {
         <ReportContentFromConfig config={yillikIzinReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Mevsimlik İşçi Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Çoklu sezon — hizmet süresi ilk giriş ile son çıkış arasında
-            </p>
-          </div>
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
           {videoLink && (
             <Button
               type="button"

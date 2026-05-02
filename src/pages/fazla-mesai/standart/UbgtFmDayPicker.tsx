@@ -50,6 +50,7 @@ export function UbgtFmDayPicker({
   setExclusions,
   showToastError,
 }: UbgtFmDayPickerProps) {
+  const [isOpen, setIsOpen] = useState(true);
   const [catalog, setCatalog] = useState<UbgtFmCatalogRow[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -125,78 +126,93 @@ export function UbgtFmDayPicker({
     setExclusions((prev) => stripPickerUbgt(prev));
   };
 
-  if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) {
-    return (
-      <section className={boxCls}>
-        <div className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
-          UBGT gün seçimi için hesap döneminin başlangıç ve bitiş tarihlerini girin (sayfada tanımlanan aralık
-          kullanılır).
-        </div>
-      </section>
-    );
-  }
+  const invalidRange = !rangeStart || !rangeEnd || rangeStart > rangeEnd;
 
   return (
     <section className={boxCls}>
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-gray-800/40">
-        <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200">UBGT günleri (FM düşümü)</h2>
-        <p className="text-[11px] font-normal text-gray-500 dark:text-gray-400 mt-1 leading-snug">
-          Aşağıda, seçilen dönemdeki kayıtlı UBGT günleri listelenir. İşaretlediğiniz günler yıllık izin dışlamasıyla aynı
-          mantıkla haftaya oturtulup FM yeniden hesaplanır. (Manuel UBGT satırlarınız varsa korunur.)
-        </p>
-      </div>
-      <div className="px-4 py-3 space-y-3">
-        {loading ? (
-          <p className="text-xs text-gray-500">UBGT günleri yükleniyor…</p>
-        ) : catalog.length === 0 ? (
-          <p className="text-xs text-gray-500">Bu dönem için listelenecek UBGT günü bulunamadı.</p>
-        ) : (
-          <>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={selectAllCatalog}
-                className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                Tümünü seç
-              </button>
-              <button
-                type="button"
-                onClick={clearPickerUbgt}
-                className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                Seçimi temizle
-              </button>
-            </div>
-            <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
-              {byYear.map(([year, days]) => (
-                <div key={year}>
-                  <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">{year}</div>
-                  <ul className="space-y-1">
-                    {days.map((d) => {
-                      const on = selected.has(d.date);
-                      return (
-                        <li key={d.date}>
-                          <label className="flex items-center gap-2 text-xs text-gray-800 dark:text-gray-200 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="rounded border-gray-300"
-                              checked={on}
-                              onChange={() => toggle(d.date)}
-                            />
-                            <span className="tabular-nums">{formatTrDate(d.date)}</span>
-                            <span className="text-gray-500 dark:text-gray-400">— {d.label}</span>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={() => setIsOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left text-sm font-normal text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+      >
+        <span>UBGT günleri (FM düşümü)</span>
+        <span className="text-gray-500 shrink-0" aria-hidden>
+          {isOpen ? "▼" : "▶"}
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="px-4 pb-4 pt-0 space-y-3 border-t border-gray-200 dark:border-gray-600">
+          {invalidRange ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400 pt-3">
+              UBGT gün seçimi için hesap döneminin başlangıç ve bitiş tarihlerini girin (sayfada tanımlanan aralık
+              kullanılır).
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-gray-600 dark:text-gray-400 pt-3 leading-snug">
+                Aşağıda, seçilen döneme ait UBGT günleri listelenir. İşaretlediğiniz günler, işçinin çalışmadığı
+                UBGT günleri olarak kabul edilir ve fazla mesai hesabında dışlanır.
+              </p>
+              <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-snug">
+                Not: UBGT/izin düşümlerinde blok başlangıcı, işaretlenen ilk gün kabul edilerek 7 günlük blok mantığıyla değerlendirilir.
+              </p>
+              <div className="space-y-3">
+                {loading ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">UBGT günleri yükleniyor…</p>
+                ) : catalog.length === 0 ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Bu dönem için listelenecek UBGT günü bulunamadı.</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllCatalog}
+                        className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Tümünü seç
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearPickerUbgt}
+                        className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Seçimi temizle
+                      </button>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
+                      {byYear.map(([year, days]) => (
+                        <div key={year}>
+                          <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">{year}</div>
+                          <ul className="space-y-1">
+                            {days.map((d) => {
+                              const on = selected.has(d.date);
+                              return (
+                                <li key={d.date}>
+                                  <label className="flex items-center gap-2 text-xs text-gray-800 dark:text-gray-200 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-gray-300"
+                                      checked={on}
+                                      onChange={() => toggle(d.date)}
+                                    />
+                                    <span className="tabular-nums">{formatTrDate(d.date)}</span>
+                                    <span className="text-gray-500 dark:text-gray-400">— {d.label}</span>
+                                  </label>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
 }

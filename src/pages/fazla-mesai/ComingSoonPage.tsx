@@ -9,7 +9,7 @@ interface Props {
 export default function FazlaMesaiComingSoon({ title, description }: Props) {
   return (
     <div className="min-h-[60vh] flex items-center justify-center p-6">
-      <div className="text-center space-y-6 max-w-lg mx-auto">
+      <div className="text-center space-y-6 w-full">
         <div className="flex justify-center">
           <div className="w-24 h-24 bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-2xl animate-pulse">
             <Clock className="w-12 h-12 text-white" />

@@ -64,6 +64,16 @@ export async function downloadPdfFromDOM(
     const clone = src.cloneNode(true) as HTMLElement;
     clone.style.maxWidth = '100%';
     clone.style.width = '100%';
+    // Kaynak node gizli tutuluyor olabilir (visibility:hidden / opacity:0).
+    // PDF kopyasında görünür hale getir ki html2canvas boş sayfa üretmesin.
+    clone.style.visibility = 'visible';
+    clone.style.opacity = '1';
+    clone.style.display = 'block';
+    // Kaynakta absolute/offscreen konum varsa kopyada sıfırla.
+    clone.style.position = 'static';
+    clone.style.left = 'auto';
+    clone.style.top = 'auto';
+    clone.style.zIndex = 'auto';
     container.appendChild(clone);
     document.body.appendChild(container);
 

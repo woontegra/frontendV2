@@ -38,7 +38,7 @@ import { adaptToWordTable } from "@/utils/wordTableAdapter";
 import { copySectionForWord } from "@/utils/copyTableForWord";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Bilirkişi UBGT";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Bilirkişi UBGT";
 
 interface StaticHoliday {
   id: string;
@@ -1462,11 +1462,46 @@ export default function UbgtBilirkisiPage() {
                 />
 
                 <section className={calcSectionBoxCls}>
-                  <h2 className={calcSectionTitleCls}>Not</h2>
-                  <p className={calcHelperTextCls}>
-                    Bilirkişi modunda talep, tanık beyanı ile çakışan dönemlerle sınırlıdır; tatil seçimi davacıda belirlenen üst
-                    küme içinde tanık bazında yapılır.
-                  </p>
+                  <h2 className={calcSectionTitleCls}>Notlar</h2>
+                  <p className={calcHelperTextCls}>Ulusal Bayram ve Genel Tatil Günleri Hakkında Kanun</p>
+                  <div className="mt-2 max-h-[min(50vh,28rem)] overflow-y-auto break-words text-[11px] font-light text-gray-500 dark:text-gray-400 leading-relaxed space-y-2">
+                    <p>
+                      <strong className="font-semibold text-gray-900 dark:text-gray-100">Madde 1</strong> – 1923 yılında Cumhuriyetin ilan edildiği 29 Ekim günü Ulusal Bayramdır.
+                    </p>
+                    <p>
+                      Türkiye'nin içinde ve dışında Devlet adına yalnız bugün tören yapılır. Bayram 28 Ekim günü saat 13.00'ten itibaren başlar ve 29 Ekim günü devam eder.
+                    </p>
+                    <p>
+                      <strong className="font-semibold text-gray-900 dark:text-gray-100">Madde 2</strong> – Aşağıda sayılan resmi ve dini bayram günleri ile yılbaşı günü, 1 Mayıs günü ve 15 Temmuz günü genel tatil günleridir.
+                    </p>
+                    <p className="font-semibold text-gray-900 dark:text-gray-100">A) Resmi bayram günleri şunlardır:</p>
+                    <p className="pl-3">
+                      1. (Değişik: 20/4/1983 - 2818/1 md.) 23 Nisan günü Ulusal Egemenlik ve Çocuk Bayramıdır.<br />
+                      2. 19 Mayıs günü Atatürk'ü Anma ve Gençlik ve Spor Bayramı günüdür.<br />
+                      3. 30 Ağustos günü Zafer Bayramıdır.
+                    </p>
+                    <p className="font-semibold text-gray-900 dark:text-gray-100">B) Dini bayramlar şunlardır:</p>
+                    <p className="pl-3">
+                      1. Ramazan Bayramı; Arefe günü saat 13.00'ten itibaren 3,5 gündür.<br />
+                      2. Kurban Bayramı; Arefe günü saat 13.00'ten itibaren 4,5 gündür.
+                    </p>
+                    <p>
+                      <strong className="font-semibold text-gray-900 dark:text-gray-100">C)</strong> (Değişik: 25/10/2016-6752/2 md.) 1 Ocak günü yılbaşı tatili, 1 Mayıs günü Emek ve Dayanışma Günü ve 15 Temmuz günü Demokrasi ve Milli Birlik Günü tatilidir.
+                    </p>
+                    <p>
+                      <strong className="font-semibold text-gray-900 dark:text-gray-100">Madde -2</strong> – 22/4/2009 tarihli ve 5892 sayılı Kanunun 1 inci maddesiyle, &quot;yılbaşı günü&quot; ibarelerinden sonra gelmek üzere &quot;ve 1 Mayıs günü&quot; ibaresi eklenmiştir. 25/10/2016 tarihli ve 6752 sayılı Kanunun 2 nci maddesiyle, bu maddenin birinci fıkrasında yer alan &quot;ve 1 Mayıs günü&quot; ibareleri &quot;, 1 Mayıs günü ve 15 Temmuz günü&quot; olarak değiştirilmiştir.
+                    </p>
+                    <p>
+                      <strong className="font-semibold text-gray-900 dark:text-gray-100">D)</strong> (Değişik: 20/4/1983 - 2818/1 md.) Ulusal, resmi ve dini bayram günleri ile yılbaşı günü, 1 Mayıs günü ve 15 Temmuz günü resmi daire ve kuruluşlar tatil edilir.
+                    </p>
+                    <p>
+                      Bu Kanunda belirtilen Ulusal Bayram ve genel tatil günleri; Cuma günü akşamı sona erdiğinde müteakip Cumartesi gününün tamamı tatil yapılır.
+                    </p>
+                    <p>
+                      Mahiyetleri itibariyle sürekli görev yapması gereken kuruluşların özel kanunlarındaki hükümler saklıdır.
+                    </p>
+                    <p>29 Ekim günü özel işyerlerinin kapanması zorunludur.</p>
+                  </div>
                 </section>
               </div>
             </div>
@@ -1528,7 +1563,7 @@ export default function UbgtBilirkisiPage() {
               </div>
             </div>
           ),
-          onPdf: () => downloadPdfFromDOM("Bilirkişi UBGT Rapor", "report-content"),
+          onPdf: () => downloadPdfFromDOM("Bilirkişi UBGT Rapor", "ubgt-bilirkisi-print-wrapper"),
         }}
       />
     </>

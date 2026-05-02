@@ -13,14 +13,14 @@ const MENU_ITEMS = [
   /** Kıdem / İhbar ile aynı: tıklanınca kart seçim sayfası (/fazla-mesai) */
   { id: "fazla-mesai", label: "Fazla Mesai Alacağı", to: "/fazla-mesai", hasSubPages: true },
   { id: "yillik-izin", label: "Yıllık Ücretli İzin Alacağı", to: "/yillik-izin", hasSubPages: true },
+  { id: "ubgt", label: "UBGT Alacağı", to: "/ubgt", hasSubPages: true },
+  { id: "hafta-tatili", label: "Hafta Tatili Alacağı", to: "/hafta-tatili", hasSubPages: true },
   { id: "ucret", label: "Ücret Alacağı", to: "/ucret-alacagi" },
   { id: "is-arama-izni", label: "İş Arama İzni Ücreti", to: "/is-arama-izni-ucreti" },
   { id: "bakiye-ucret", label: "Bakiye Ücret Alacağı", to: "/bakiye-ucret-alacagi" },
   { id: "prim", label: "Prim Alacağı", to: "/prim-alacagi" },
   { id: "kotu-niyet", label: "Kötü Niyet Tazminatı", to: "/kotu-niyet-tazminati" },
   { id: "bosta-gecen-sure", label: "Boşta Geçen Süre Ücreti", to: "/bosta-gecen-sure-ucreti" },
-  { id: "ubgt", label: "UBGT Alacağı", to: "/ubgt" },
-  { id: "hafta-tatili", label: "Hafta Tatili Alacağı", to: "/hafta-tatili", hasSubPages: true },
   { id: "ise-almama", label: "İşe Başlatmama Tazminatı", to: "/ise-almama-tazminati" },
   { id: "ayrimcilik", label: "Ayrımcılık Tazminatı", to: "/ayrimcilik-tazminati" },
   { id: "haksiz-fesih", label: "Haksız Fesih Tazminatı", to: "/haksiz-fesih-tazminati" },
@@ -78,8 +78,17 @@ export default function Sidebar({ collapsed, onClose }: Props) {
   const navLinkCls = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-2 py-2 px-2 rounded text-[12px] ${isActive ? "text-indigo-600 dark:text-indigo-400 font-medium" : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"}`;
 
+  /** Sabit yükseklik: AppShell’deki tam genişlik ayırıcı çizgi `bottom-[4.5rem]` ile aynı olmalı */
+  const sidebarFooter = (
+    <div className="flex-shrink-0 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-2.5 h-[4.5rem] flex flex-col items-center justify-center text-xs text-center leading-tight text-gray-500 dark:text-gray-400 lg:border-t-0">
+      <div className="font-medium">Bilirkişi Hesaplama Araçları</div>
+      <div className="mt-1">Sürüm 2.0</div>
+    </div>
+  );
+
   const sidebarContent = (
-    <div className="flex flex-col h-full pt-14 lg:pt-3 px-2.5 pb-20 lg:pb-6 overflow-y-auto">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex-1 min-h-0 overflow-y-auto pt-14 px-2.5 pb-4 lg:pb-2">
       <NavLink to="/dashboard" className={linkClass} onClick={handleNavClick}>
         <Menu className="w-4 h-4 flex-shrink-0" />
         <span>Yönetim Paneli</span>
@@ -191,6 +200,8 @@ export default function Sidebar({ collapsed, onClose }: Props) {
           )
         )}
       </div>
+      </div>
+      {sidebarFooter}
     </div>
   );
 

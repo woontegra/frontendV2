@@ -1,0 +1,196 @@
+import { useMemo, useState, useEffect, useCallback } from "react";
+import type { ExcludedDay } from "@/utils/exclusionStorage";
+import { fetchUbgtFmCatalog, type UbgtFmCatalogRow } from "../standart/ubgtFmCatalog";
+
+const PREFIX = "ubgt-fm-";
+const boxCls =
+  "rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-gray-50/50 dark:bg-gray-900/30 shadow-sm";
+
+function stripPickerUbgt(rows: ExcludedDay[]): ExcludedDay[] {
+  return rows.filter((e) => e.type !== "UBGT");
+}
+
+function selectedIsoSetFromExclusions(exclusions: ExcludedDay[]): Set<string> {
+  const s = new Set<string>();
+  for (const e of exclusions) {
+    if (e.type !== "UBGT") continue;
+    const start = (e.start || "").slice(0, 10);
+    const end = (e.end || "").slice(0, 10);
+    if (!start || !end || start !== end) continue;
+    s.add(start);
+  }
+  return s;
+}
+
+function formatTrDate(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  if (!y || !m || !d) return iso;
+  return `${d.padStart(2, "0")}.${m.padStart(2, "0")}.${y}`;
+}
+
+export interface VardiyaUbgtFmDayPickerProps {
+  rangeStart: string;
+  rangeEnd: string;
+  exclusions: ExcludedDay[];
+  setExclusions: React.Dispatch<React.SetStateAction<ExcludedDay[]>>;
+  showToastError: (msg: string) => void;
+}
+
+export function VardiyaUbgtFmDayPicker({
+  rangeStart,
+  rangeEnd,
+  exclusions,
+  setExclusions,
+  showToastError,
+}: VardiyaUbgtFmDayPickerProps) {
+  const [isOpen, setIsOpen] = useState(true);
+  const [catalog, setCatalog] = useState<UbgtFmCatalogRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) {
+      setCatalog([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    fetchUbgtFmCatalog(rangeStart, rangeEnd)
+      .then((rows) => {
+        if (!cancelled) setCatalog(rows);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) {
+          setCatalog([]);
+          showToastError(e?.message || "UBGT gün listesi yüklenemedi");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rangeStart, rangeEnd, showToastError]);
+
+  const byYear = useMemo(() => {
+    const m = new Map<number, UbgtFmCatalogRow[]>();
+    for (const r of catalog) {
+      const y = Number(r.date.slice(0, 4));
+      if (!Number.isFinite(y)) continue;
+      if (!m.has(y)) m.set(y, []);
+      m.get(y)!.push(r);
+    }
+    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  }, [catalog]);
+
+  const selected = useMemo(() => selectedIsoSetFromExclusions(exclusions), [exclusions]);
+
+  const applySelection = useCallback(
+    (next: Set<string>) => {
+      const meta = new Map(catalog.map((r) => [r.date, r]));
+      const newUbgt: ExcludedDay[] = [...next].sort().map((date) => {
+        const row = meta.get(date);
+        const dnum = row && Number(row.days) > 0 ? Math.max(1, Math.round(Number(row.days))) : 1;
+        return {
+          id: `${PREFIX}${date}`,
+          type: "UBGT",
+          start: date,
+          end: date,
+          days: dnum,
+        };
+      });
+      setExclusions((prev) => [...stripPickerUbgt(prev), ...newUbgt]);
+    },
+    [catalog, setExclusions]
+  );
+
+  const toggle = (iso: string) => {
+    const next = new Set(selected);
+    if (next.has(iso)) next.delete(iso);
+    else next.add(iso);
+    applySelection(next);
+  };
+
+  const selectAllCatalog = () => applySelection(new Set(catalog.map((r) => r.date)));
+  const clearPickerUbgt = () => setExclusions((prev) => stripPickerUbgt(prev));
+
+  const invalidRange = !rangeStart || !rangeEnd || rangeStart > rangeEnd;
+
+  return (
+    <section className={boxCls}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left text-sm font-normal text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+      >
+        <span>UBGT günleri (FM düşümü)</span>
+        <span className="text-gray-500 shrink-0" aria-hidden>{isOpen ? "▼" : "▶"}</span>
+      </button>
+
+      {isOpen && (
+        <div className="px-4 pb-4 pt-0 space-y-3 border-t border-gray-200 dark:border-gray-600">
+          {invalidRange ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400 pt-3">
+              UBGT gün seçimi için hesap döneminin başlangıç ve bitiş tarihlerini girin.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-gray-600 dark:text-gray-400 pt-3 leading-snug">
+                Aşağıda, seçilen döneme ait UBGT günleri listelenir. İşaretlediğiniz günler, işçinin çalışmadığı
+                UBGT günleri olarak kabul edilir ve fazla mesai hesabında dışlanır.
+              </p>
+              <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-snug">
+                Not: UBGT/izin düşümlerinde blok başlangıcı, işaretlenen ilk gün kabul edilerek 7 günlük blok mantığıyla değerlendirilir.
+              </p>
+              <div className="space-y-3">
+                {loading ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">UBGT günleri yükleniyor…</p>
+                ) : catalog.length === 0 ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Bu dönem için listelenecek UBGT günü bulunamadı.</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={selectAllCatalog} className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">
+                        Tümünü seç
+                      </button>
+                      <button type="button" onClick={clearPickerUbgt} className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">
+                        Seçimi temizle
+                      </button>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto space-y-3 pr-1">
+                      {byYear.map(([year, days]) => (
+                        <div key={year}>
+                          <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">{year}</div>
+                          <ul className="space-y-1">
+                            {days.map((d) => {
+                              const on = selected.has(d.date);
+                              return (
+                                <li key={d.date}>
+                                  <label className="flex items-center gap-2 text-xs text-gray-800 dark:text-gray-200 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-gray-300"
+                                      checked={on}
+                                      onChange={() => toggle(d.date)}
+                                    />
+                                    <span className="tabular-nums">{formatTrDate(d.date)}</span>
+                                    <span className="text-gray-500 dark:text-gray-400">— {d.label}</span>
+                                  </label>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+

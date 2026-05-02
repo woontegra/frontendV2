@@ -11,7 +11,8 @@ export function fmt(n: number | undefined): string {
 
 /** Tutar + ₺ (sembol sağda: 47.858,46 ₺) */
 export function fmtCurrency(n: number | undefined): string {
-  return `${fmt(n)} ₺`;
+  // Dar hücrelerde tutar ile ₺ arasında satır kırılmasın
+  return `${fmt(n)}\u00A0₺`;
 }
 
 /** Fazla mesai brüt = (brüt × katSayi × hafta × fmHours) / 225 × 1.5 */

@@ -29,8 +29,10 @@ const cards: Array<{
   { title: "Dönemsel", to: "/fazla-mesai/donemsel", icon: Layers, color: "orange" },
   { title: "Dönemsel Haftalık", to: "/fazla-mesai/donemsel-haftalik", icon: CalendarClock, color: "cyan" },
   { title: "Yeraltı İşçileri", to: "/fazla-mesai/yeralti-isci", icon: HardHat, color: "stone" },
-  { title: "24 / 48 Saat Vardiya", to: "/fazla-mesai/vardiya-24-48", icon: Sun, color: "yellow" },
-  { title: "Gemi Adamı", to: "/fazla-mesai/gemi-adami", icon: Ship, color: "sky" },
+  { title: "24 Saat Vardiya", to: "/fazla-mesai/vardiya-24", icon: Sun, color: "yellow" },
+  { title: "48 Saat Vardiya", to: "/fazla-mesai/vardiya-48", icon: Sun, color: "yellow" },
+  { title: "Gemi Adamı (Günlük)", to: "/fazla-mesai/gemi-adami", icon: Ship, color: "sky" },
+  { title: "Gemi Adamı (7/24)", to: "/fazla-mesai/gemi-7-24", icon: Ship, color: "sky" },
   { title: "Ev İşçileri", to: "/fazla-mesai/ev", icon: Home, color: "emerald", cta: "Bilgilendirmeyi oku →" },
   {
     title: "12 Saat Vardiya Usulü",
@@ -119,7 +121,7 @@ export default function FazlaMesaiSelectionPage() {
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Hesaplama türünü seçin</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 max-w-5xl mx-auto">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
           {cards.map(({ title, to, icon: Icon, color, cta, comingSoon }) => {
             const style = cardStyles[color] || cardStyles.amber;
             const body = (

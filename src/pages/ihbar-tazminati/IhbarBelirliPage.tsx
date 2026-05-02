@@ -225,7 +225,7 @@ export default function IhbarBelirliPage() {
   }, [effectiveId, setFormValues, setTotals, setAppliedEklenti, setCurrentRecordName, setExitDate, success, showToastError]);
 
   useEffect(() => {
-    document.title = `Mercan Danışmanlık | ${PAGE_TITLE}`;
+    document.title = `Bilirkişi Hesap | ${PAGE_TITLE}`;
   }, []);
 
   const handleFormChange = useCallback(

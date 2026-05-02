@@ -283,7 +283,7 @@ export default function IhbarMevsimPage() {
   }, [effectiveId, setFormValues, setTotals, setAppliedEklenti, setCurrentRecordName, setExitDate, success, showToastError]);
 
   useEffect(() => {
-    document.title = `Mercan Danışmanlık | ${PAGE_TITLE}`;
+    document.title = `Bilirkişi Hesap | ${PAGE_TITLE}`;
   }, []);
 
   const handleFormChange = useCallback(

@@ -9,7 +9,7 @@ const cards: Array<{
   color: string;
   comingSoon?: boolean;
 }> = [
-  { title: "İş Kanununa Göre Yıllık İzin Hesaplama", to: "/yillik-izin/standart", icon: Briefcase, color: "amber" },
+  { title: "Yıllık İzin Hesaplama", to: "/yillik-izin/standart", icon: Briefcase, color: "amber" },
   { title: "Borçlar Kanunu Yıllık İzin Hesaplama", to: "/yillik-izin/borclar", icon: Scale, color: "slate" },
   {
     title: "Gemi Adamları Yıllık İzin Hesaplama",
@@ -23,7 +23,8 @@ const cards: Array<{
     icon: Sun,
     color: "orange",
   },
-  { title: "Basın İşçileri Yıllık İzin Hesaplama", to: "/yillik-izin/basin", icon: Newspaper, color: "rose" },
+  { title: "Basın İşçileri Yıllık İzin (Günlük Gazete)", to: "/yillik-izin/basin", icon: Newspaper, color: "rose" },
+  { title: "Basın İşçileri Yıllık İzin (Günlük Olmayan)", to: "/yillik-izin/basin/gunluk-olmayan", icon: Newspaper, color: "rose" },
   { title: "Kısmi Süreli / Part Time Yıllık İzin Hesaplama", to: "/yillik-izin/kismi", icon: Clock, color: "violet" },
   { title: "Belirli Süreli Yıllık İzin Hesaplama", to: "/yillik-izin/belirli", icon: FileCheck, color: "emerald" },
 ];

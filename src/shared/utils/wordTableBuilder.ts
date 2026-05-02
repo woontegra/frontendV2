@@ -9,13 +9,14 @@ export function buildWordTable(headers: string[], rows: (string | number)[][]): 
   let table = '<table border="1" cellpadding="2" cellspacing="0">';
 
   if (headers && headers.length > 0) {
-    table += "<tr>";
+    table += "<thead><tr>";
     headers.forEach((h) => {
-      table += `<td><strong>${h}</strong></td>`;
+      table += `<th scope="col">${h}</th>`;
     });
-    table += "</tr>";
+    table += "</tr></thead>";
   }
 
+  table += "<tbody>";
   rows.forEach((row) => {
     table += "<tr>";
     row.forEach((cell) => {
@@ -23,6 +24,7 @@ export function buildWordTable(headers: string[], rows: (string | number)[][]): 
     });
     table += "</tr>";
   });
+  table += "</tbody>";
 
   table += "</table>";
   return table + "<p>&nbsp;</p>";

@@ -21,3 +21,19 @@ export const calcSectionBoxCls =
 /** Açıklama / uyarı alt metni */
 export const calcHelperTextCls =
   "text-xs text-gray-600 dark:text-gray-400 mt-1.5 leading-relaxed";
+
+/** Hesaplama tabloları için ortak görünüm */
+export const calcDataTableWrapCls = "w-full overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-600";
+
+export const calcDataTableCls =
+  "w-full border-collapse text-xs text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800";
+
+export const calcDataTableHeadRowCls = "bg-gray-50 dark:bg-gray-800/80";
+
+export const calcDataTableHeadCellCls =
+  "px-2 py-1.5 border border-gray-200 dark:border-gray-600 text-xs font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap";
+
+export const calcDataTableCellCls =
+  "px-2 py-1.5 border border-gray-200 dark:border-gray-600 text-xs text-gray-900 dark:text-gray-100";
+
+export const calcDataTableFootRowCls = "bg-gray-50 dark:bg-gray-800/80 font-semibold";

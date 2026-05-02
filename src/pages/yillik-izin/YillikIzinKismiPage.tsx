@@ -32,7 +32,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Kısmi Süreli Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Kısmi Süreli Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_kismi";
 const REDIRECT_PATH = "/yillik-izin/kismi";
@@ -758,14 +758,8 @@ export default function YillikIzinKismiPage() {
         <ReportContentFromConfig config={kismiReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Kısmi Süreli / Part Time Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">4857 — çoklu çalışma dönemi, standart izin dilimleri</p>
-          </div>
           {videoLink && (
             <Button
               type="button"
@@ -1145,6 +1139,9 @@ export default function YillikIzinKismiPage() {
 
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
               <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-2">Notlar</h3>
+              <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                İş Kanunu – Yıllık İzin 14. Madde
+              </div>
               <ol className="space-y-2 text-[11px] font-light text-gray-500 dark:text-gray-400 list-decimal pl-4">
                 {NOTE_ITEMS.map((note, i) => (
                   <li key={i}>{note}</li>

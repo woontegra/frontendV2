@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Menu, Sun, Moon, Ticket, Video, Bell } from "lucide-react";
+import { Sun, Moon, Ticket, Video, Bell } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { apiClient } from "@/utils/apiClient";
@@ -87,8 +87,11 @@ function getPageTitle(pathname: string): string {
       "donemsel-haftalik": "Dönemsel Haftalık Fazla Mesai",
       "donemsel": "Dönemsel Fazla Mesai",
       "yeralti-isci": "Yeraltı İşçileri Fazla Mesai",
+      "vardiya-24": "24 Saat Vardiya Fazla Mesai",
+      "vardiya-48": "48 Saat Vardiya Fazla Mesai",
       "vardiya-24-48": "24/48 Saat Vardiya Fazla Mesai",
-      "gemi-adami": "Gemi Adamı Fazla Mesai",
+      "gemi-adami": "Gemi Adamı (Günlük) Fazla Mesai",
+      "gemi-7-24": "Gemi Adamı (7/24) Fazla Mesai",
       "ev": "Ev İşçileri Fazla Mesai",
     }, "Fazla Mesai Alacağı"],
   ];
@@ -188,33 +191,71 @@ export default function Header({ sidebarCollapsed, onSidebarToggle }: Props) {
   // Sayfa title güncelle
   useEffect(() => {
     const t = getPageTitle(location.pathname);
-    document.title = t ? `Bilirkişi Hesaplama | ${t}` : "Bilirkişi Hesaplama | Mercan Danışmanlık";
+    document.title = t ? `Bilirkişi Hesap | ${t}` : "Bilirkişi Hesap";
   }, [location.pathname]);
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-20 h-14 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 shadow-sm flex items-center">
-      {/* ── Sol: Hamburger / Sidebar toggle + Logo alanı ─────────────────── */}
-      <div className="flex items-center gap-1 px-2 sm:px-3 lg:w-56 flex-shrink-0">
-        {/* Desktop sidebar daralt/genişlet */}
-        <button
-          onClick={() => {
-            if (window.innerWidth < 1024) {
-              try { window.dispatchEvent(new Event("mobile-sidebar:toggle")); } catch (_e) { /* sessiz */ }
-            } else {
-              onSidebarToggle();
-            }
-          }}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-          aria-label={sidebarCollapsed ? "Kenar çubuğunu aç" : "Kenar çubuğunu kapat"}
+    <header className="fixed top-0 left-0 right-0 z-[35] h-14 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 shadow-sm flex items-center">
+      {/* ── Sol: Logo (v1 ile aynı) + masaüstü sidebar + mobil menü ───────── */}
+      <div className="flex items-center justify-start lg:justify-between gap-2 px-2 sm:px-4 lg:w-56 lg:pr-2 flex-shrink-0 min-w-0">
+        <Link
+          to="/dashboard"
+          className="hidden lg:flex items-center flex-shrink-0 ml-1 sm:ml-2"
+          aria-label="Ana sayfa"
         >
-          <Menu className="w-5 h-5 text-gray-600 dark:text-gray-300" />
-        </button>
-
-        <Link to="/dashboard" className="hidden sm:block flex-shrink-0 ml-1" aria-label="Ana sayfa">
-          <span className="font-semibold text-gray-800 dark:text-white whitespace-nowrap text-sm">
-            Bilirkişi Hesaplama
-          </span>
+          <img
+            src="/logo.png"
+            alt="Bilirkişi Hesaplama Araçları Hizmetleri"
+            className="h-11 w-auto max-w-[200px] object-contain dark:hidden"
+          />
+          <img
+            src="/logobeyaz.png"
+            alt="Bilirkişi Hesaplama Araçları Hizmetleri"
+            className="h-11 w-auto max-w-[200px] object-contain hidden dark:block"
+          />
         </Link>
+        <div className="flex items-center">
+          <button
+            type="button"
+            className="hidden lg:inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            aria-label={sidebarCollapsed ? "Kenar çubuğunu aç" : "Kenar çubuğunu daralt"}
+            onClick={onSidebarToggle}
+          >
+            <svg
+              className={`w-5 h-5 text-gray-700 dark:text-gray-300 transition-transform duration-300 ${sidebarCollapsed ? "rotate-90" : "rotate-0"}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="inline-flex lg:hidden items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            aria-label="Menüyü aç veya kapat"
+            onClick={() => {
+              try {
+                window.dispatchEvent(new Event("mobile-sidebar:toggle"));
+              } catch {
+                /* sessiz */
+              }
+            }}
+          >
+            <svg
+              className="w-5 h-5 text-gray-700 dark:text-gray-300"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* ── Eğitim Videoları (orta-sol, md ve üstü) ───────────────────────── */}

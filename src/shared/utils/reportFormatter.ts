@@ -165,7 +165,21 @@ export function formatForPrint(data: ReportData): string {
     td { text-align: right; }
     td:first-child { white-space: nowrap !important; text-align: left; }
     .section-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; margin-top: 16px; }
-    .copy-icon-btn { display: none !important; }
+    /*
+     * Word'e kopyala kontrolleri: yazdırma iframe'inde Tailwind yok; SVG ikonlar devasa görünür.
+     * Tüm rapor önizlemelerinde ortak gizleme (sayfa bazlı sınıf adları dahil).
+     */
+    .copy-icon-btn,
+    .ht-basin-copy-btn,
+    .ht-gemi-copy-btn,
+    .ht-copy-btn,
+    button[title="Word'e kopyala"],
+    button[title="Kopyalandı"],
+    .sec-header button,
+    .section-header button,
+    [data-section] > div:first-child button[type="button"] {
+      display: none !important;
+    }
   </style>
 </head>
 <body>

@@ -13,19 +13,24 @@ import { getVideoLink } from "@/config/videoLinks";
 import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
 import {
   segmentOvertimeResult,
-  computeDisplayRows,
   calculateOvertimeWith270AndLimitation,
   getAsgariUcretByDate,
   calculateWeeksBetweenDates,
   clampToLastDayOfMonth,
-  generateDynamicIntervalsFromWitnesses,
-  calculateOvertimeHours,
   buildWordTable,
   adaptToWordTable,
   copySectionForWord,
   buildMergedWitnessSegments,
   type FazlaMesaiRowBase,
 } from "@modules/fazla-mesai/shared";
+import { startOfDay } from "date-fns";
+import { splitByExclusions } from "@/modules/tanikli-standart/rules/splitByExclusions.rule";
+import {
+  calculateFm,
+  calculateRowMoney,
+  type TanikliRowWithSegmentFields,
+} from "@/modules/tanikli-standart/rules/calculateFm.rule";
+import { preserveWeeks, countWeeksBySevenDaySteps } from "@/modules/tanikli-standart/rules/preserveWeeks.rule";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
 import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
@@ -42,10 +47,8 @@ import type { Witness } from "./contract";
 import { fmt, fmtCurrency } from "../standart/calculations";
 import { FAZLA_MESAI_DENOMINATOR, FAZLA_MESAI_KATSAYI, WEEKLY_WORK_LIMIT, STANDARD_DAILY_REFERENCE_HOURS } from "../standart/constants";
 import { ceilWeeklyWorkHoursToHalfHour } from "@/shared/utils/fazlaMesai/weeklyHoursRounding";
-import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
-import { expandTanikliStandartRowsAnnualLeaveV2 } from "./tanikliStandartAnnualLeaveV2";
 
 const PAGE_TITLE = "Tanıklı Standart Fazla Mesai Hesaplama";
 const RECORD_TYPE = "tanikli_standart_fazla_mesai";
@@ -60,6 +63,8 @@ const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200"
 
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
+const DAMGA_VERGISI_ORANI = 0.00759;
+const YARGITAY_270_FM_DROP = 5.2;
 
 function formatDateTR(iso: string | undefined): string {
   if (!iso) return "";
@@ -202,81 +207,6 @@ export default function TanikliStandartPage() {
 
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
-
-  const splitWitnesses = useMemo(() => {
-    const valid = taniklar.filter((t) => t.dateIn && t.dateOut && t.in && t.out);
-    if (valid.length === 0) return [];
-    const sorted = [...valid].sort((a, b) => new Date(a.dateIn).getTime() - new Date(b.dateIn).getTime());
-    const out: Array<{ dateIn: string; dateOut: string; in: string; out: string }> = [];
-    sorted.forEach((witness, idx) => {
-      const wStart = new Date(witness.dateIn);
-      const wEnd = new Date(witness.dateOut);
-      const overlapping = sorted.filter((other, otherIdx) => {
-        if (otherIdx === idx) return false;
-        const oStart = new Date(other.dateIn);
-        // Sonraki tanık bu tanığın içinde başlıyorsa → overlap
-        // VEYA aynı başlangıç tarihinde ama dizide daha sonra geliyorsa → bu tanık "geçersiz" sayılır
-        return (oStart > wStart && oStart < wEnd) ||
-               (oStart.getTime() === wStart.getTime() && otherIdx > idx);
-      });
-      if (overlapping.length === 0) {
-        out.push({ dateIn: witness.dateIn, dateOut: witness.dateOut, in: witness.in, out: witness.out });
-        return;
-      }
-      let currentStart = wStart;
-      const sortedOverlaps = overlapping.sort((a, b) => new Date(a.dateIn).getTime() - new Date(b.dateIn).getTime());
-      sortedOverlaps.forEach((overlap) => {
-        const overlapStart = new Date(overlap.dateIn);
-        const overlapEnd = new Date(overlap.dateOut);
-        // Bu overlap currentStart'ın gerisinde bitmişse tamamen atla — currentStart'ı geri alma
-        if (overlapEnd.getTime() < currentStart.getTime()) return;
-        if (currentStart < overlapStart) {
-          const segmentEnd = new Date(overlapStart);
-          segmentEnd.setDate(segmentEnd.getDate() - 1);
-          if (segmentEnd >= currentStart) {
-            out.push({
-              dateIn: currentStart.toISOString().slice(0, 10),
-              dateOut: segmentEnd.toISOString().slice(0, 10),
-              in: witness.in,
-              out: witness.out,
-            });
-          }
-        }
-        const nextStart = new Date(overlapEnd);
-        nextStart.setDate(nextStart.getDate() + 1);
-        currentStart = nextStart;
-      });
-      if (currentStart <= wEnd) {
-        out.push({
-          dateIn: currentStart.toISOString().slice(0, 10),
-          dateOut: wEnd.toISOString().slice(0, 10),
-          in: witness.in,
-          out: witness.out,
-        });
-      }
-    });
-    return out;
-  }, [taniklar]);
-
-  const fmTextData = useMemo(() => {
-    const davaciDateIn = iseGiris || davaci?.dateIn || "";
-    const davaciDateOut = istenCikis || davaci?.dateOut || "";
-    if (!davaciDateIn || !davaciDateOut || !davaci?.in || !davaci?.out) return { results: [] };
-    if (splitWitnesses.length === 0) return { results: [] };
-
-    const davaciForInterval = {
-      startDate: davaciDateIn,
-      endDate: davaciDateOut,
-      startTime: davaci.in,
-      endTime: davaci.out,
-      haftalikGunSayisi: Number(weeklyDays) || 6,
-    };
-    const hg = Number(weeklyDays) || 6;
-    const sevenDayMode = hg === 7 ? activeTab : undefined;
-    const intervals = generateDynamicIntervalsFromWitnesses(davaciForInterval, splitWitnesses);
-    if (!intervals?.length) return { results: [] };
-    return calculateOvertimeHours(intervals, { sevenDayMode });
-  }, [iseGiris, istenCikis, davaci, splitWitnesses, weeklyDays, activeTab]);
 
   /** Eski yapı: DAVACI + her TANIK için ayrı kart (tanık ismi ile) */
   const fmPeriods = useMemo(() => {
@@ -477,7 +407,8 @@ export default function TanikliStandartPage() {
           }
         }
 
-        const weeks = calculateWeeksBetweenDates(period.start, period.end) || 1;
+        // `|| 1` kaldırıldı: 1–2 günlük kuyruk yanlışlıkla "1 hafta" oluyordu; 0 hafta kabul edilir.
+        const weeks = Math.max(0, calculateWeeksBetweenDates(period.start, period.end));
         const brut = getAsgariUcretByDate(period.start) || 0;
         const fm = Number(
           ((brut * kats * weeks * seg.fmHours) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI
@@ -505,19 +436,23 @@ export default function TanikliStandartPage() {
       });
     });
 
-    if (exclusions.length > 0) {
-      const weeklyOffDayNum =
-        haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
-      return expandTanikliStandartRowsAnnualLeaveV2(
-        tableRows as FazlaMesaiRowBase[],
-        exclusions,
-        Number(weeklyDays) || 6,
-        Number.isInteger(weeklyOffDayNum) ? weeklyOffDayNum : null,
-        activeTab
-      );
-    }
+    const weeklyOffDayNum =
+      haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
+    const weeklyOff = Number.isInteger(weeklyOffDayNum) ? weeklyOffDayNum : null;
 
-    return tableRows;
+    const originalTotalWeeks = tableRows.reduce(
+      (a, r) => a + Math.max(0, Math.floor(Number(r.weeks) || 0)),
+      0
+    );
+
+    let pipeline = splitByExclusions(tableRows as FazlaMesaiRowBase[], exclusions, {
+      weeklyOffDay: weeklyOff,
+    });
+    pipeline = pipeline.map((r) => calculateFm(r as TanikliRowWithSegmentFields));
+    pipeline = preserveWeeks(pipeline, originalTotalWeeks);
+    pipeline = pipeline.map((r) => calculateRowMoney(r, kats));
+
+    return pipeline as Array<Record<string, unknown> & FazlaMesaiRowBase>;
   }, [
     iseGiris,
     istenCikis,
@@ -553,42 +488,167 @@ export default function TanikliStandartPage() {
     return 0;
   }, [rows]);
 
+  /** Tanıklı Standart: tableDisplayPipeline / applyAnnualLeaveExclusions kullanılmaz; cetvel burada birleştirilir. */
   const computedDisplayRows = useMemo(() => {
-    try {
-      return computeDisplayRows({
-        rows: rows as FazlaMesaiRowBase[],
-        manualRows: manualRows as FazlaMesaiRowBase[],
-        rowOverrides: rowOverrides as Record<string, Partial<FazlaMesaiRowBase>>,
-        katSayi: katSayi || 1,
-        weeklyFMSaat: weeklyFMSaatFallback,
-        exclusions,
-        skipAnnualLeaveExclusions: exclusions.length > 0,
-        mode270,
-        iseGiris,
-        istenCikis,
-        zamanasimiBaslangic,
-        calculateOvertime270Detailed: calculateOvertimeWith270AndLimitation,
-      }) as Array<{ fm: number; net: number }>;
-    } catch {
-      return rows;
+    const kats = katSayi || 1;
+
+    const autoRows = (rows as FazlaMesaiRowBase[])
+      .filter((row) => !(rowOverrides[row.id] as { hidden?: boolean } | undefined)?.hidden)
+      .map((row) => {
+        const override = rowOverrides[row.id] as Partial<FazlaMesaiRowBase> | undefined;
+        const merged = (override ? { ...row, ...override } : { ...row }) as FazlaMesaiRowBase;
+        const startISO = merged.startISO ?? row.startISO;
+        const endISO = merged.endISO ?? row.endISO;
+        const hasDateOverride =
+          !!override &&
+          (override.startISO !== undefined || override.endISO !== undefined);
+        let weeksFromDates: number | undefined;
+        if (hasDateOverride && startISO && endISO) {
+          const a = startOfDay(new Date(startISO));
+          const b = startOfDay(new Date(endISO));
+          if (!Number.isNaN(+a) && !Number.isNaN(+b) && b >= a) {
+            weeksFromDates = countWeeksBySevenDaySteps(a, b);
+          }
+        }
+        let effectiveWeeks =
+          (override?.weeks as number | undefined) ?? weeksFromDates ?? merged.weeks ?? row.weeks;
+        if (
+          typeof effectiveWeeks === "number" &&
+          effectiveWeeks <= 0 &&
+          ((weeksFromDates ?? merged.weeks ?? row.weeks ?? 0) as number) > 0
+        ) {
+          effectiveWeeks = (weeksFromDates ?? merged.weeks ?? row.weeks ?? 0) as number;
+        }
+        if (
+          override &&
+          (override.weeks !== undefined ||
+            override.startISO !== undefined ||
+            override.endISO !== undefined ||
+            override.brut !== undefined ||
+            override.fmHours !== undefined ||
+            weeksFromDates !== undefined)
+        ) {
+          merged.weeks = Math.max(0, Math.floor(Number(effectiveWeeks) || 0));
+          merged.originalWeekCount = (override.originalWeekCount as number | undefined) ?? merged.weeks;
+          if (override.brut != null) merged.brut = override.brut;
+          if (override.fmHours != null) merged.fmHours = override.fmHours;
+        }
+        return calculateRowMoney(merged, kats);
+      });
+
+    const manualWithOverrides = (manualRows as FazlaMesaiRowBase[]).map((row) => {
+      const override = rowOverrides[row.id] as Partial<FazlaMesaiRowBase> | undefined;
+      const merged = (override ? { ...row, ...override } : { ...row }) as FazlaMesaiRowBase;
+      const startISO = merged.startISO ?? row.startISO;
+      const endISO = merged.endISO ?? row.endISO;
+      let weeksFromDates: number | undefined;
+      if (startISO && endISO) {
+        const sd = startOfDay(new Date(startISO));
+        const ed = startOfDay(new Date(endISO));
+        if (!Number.isNaN(+sd) && !Number.isNaN(+ed) && ed >= sd) {
+          weeksFromDates = countWeeksBySevenDaySteps(sd, ed);
+        }
+      }
+      let weeks = (merged.weeks as number | undefined) ?? weeksFromDates ?? 0;
+      if (weeks <= 0 && ((weeksFromDates ?? merged.weeks ?? 0) as number) > 0) {
+        weeks = (weeksFromDates ?? merged.weeks ?? 0) as number;
+      }
+      merged.weeks = Math.max(0, Math.floor(Number(weeks) || 0));
+      merged.originalWeekCount = merged.originalWeekCount ?? merged.weeks;
+      merged.fmHours = merged.fmHours ?? weeklyFMSaatFallback;
+      merged.brut = merged.brut ?? 0;
+      return calculateRowMoney(merged, kats);
+    });
+
+    const mergedList: FazlaMesaiRowBase[] = [];
+    for (const autoRow of autoRows) {
+      mergedList.push(autoRow);
+      const manualAfter = manualWithOverrides.filter(
+        (m) => (m as FazlaMesaiRowBase).insertAfter === autoRow.id
+      );
+      mergedList.push(...manualAfter);
     }
+    const insertedManualIds = new Set(
+      mergedList.filter((r) => r.isManual).map((r) => r.id)
+    );
+    mergedList.push(...manualWithOverrides.filter((m) => !insertedManualIds.has(m.id)));
+
+    let with270 = mergedList.map((r) => ({
+      ...r,
+      originalWeekCount: r.originalWeekCount ?? r.weeks,
+    }));
+
+    if (mode270 === "simple") {
+      with270 = with270.map((r) => {
+        const raw = Math.max(0, (Number(r.fmHours) || 0) - YARGITAY_270_FM_DROP);
+        const fmHours = Math.round(raw * 1e4) / 1e4;
+        return { ...r, fmHours };
+      });
+    } else if (mode270 === "detailed") {
+      const valid = with270.filter((r) => r.startISO && r.endISO);
+      const weeklyFM = valid[0]?.fmHours ?? weeklyFMSaatFallback;
+      const tabloSatirlari = valid.map((r) => ({
+        baslangic: new Date(r.startISO!),
+        bitis: new Date(r.endISO!),
+      }));
+      if (tabloSatirlari.length > 0 && iseGiris && istenCikis && weeklyFM > 0) {
+        const sonuclar = calculateOvertimeWith270AndLimitation({
+          iseGirisTarihi: new Date(iseGiris),
+          istenCikisTarihi: new Date(istenCikis),
+          haftalikFazlaMesaiSaati: weeklyFM,
+          zamanaSimiTarihi: zamanasimiBaslangic ? new Date(zamanasimiBaslangic) : undefined,
+          yillikIzinler: [],
+          tabloSatirlari,
+        });
+        with270 = with270.map((r) => {
+          const j = valid.findIndex((v) => v.id === r.id);
+          if (j >= 0 && sonuclar[j] != null) {
+            const rawWeeks = r.originalWeekCount ?? r.weeks ?? 0;
+            const adjusted = sonuclar[j].fmHafta;
+            const isManual = !!r.isManual;
+            const newWeeks = Number.isFinite(adjusted)
+              ? isManual && adjusted <= 0
+                ? Math.max(1, rawWeeks)
+                : adjusted > 0
+                  ? adjusted
+                  : rawWeeks
+              : rawWeeks;
+            return {
+              ...r,
+              weeks: newWeeks > 0 ? newWeeks : rawWeeks,
+              originalWeekCount: r.originalWeekCount ?? r.weeks,
+            } as FazlaMesaiRowBase;
+          }
+          return r;
+        });
+      }
+    }
+
+    return with270.map((r) => calculateRowMoney(r, kats)) as Array<{ fm: number; net: number }>;
   }, [
     rows,
     manualRows,
     rowOverrides,
     katSayi,
     weeklyFMSaatFallback,
-    exclusions,
-    weeklyDays,
     mode270,
     iseGiris,
     istenCikis,
     zamanasimiBaslangic,
   ]);
 
-  /** FM saati 0 olan satırlar cetvelde gösterilmez; toplamlar buna göre. */
+  /** Hafta, FM saati veya fazla mesai tutarı 0 olan satırlar cetvelde gösterilmez; toplamlar buna göre. */
   const tableDisplayRows = useMemo(
-    () => (computedDisplayRows as Array<{ fmHours?: number; fm?: number }>).filter((r) => Number(r.fmHours ?? 0) !== 0),
+    () =>
+      (computedDisplayRows as Array<{ fmHours?: number; fm?: number; weeks?: number; isManual?: boolean }>).filter(
+        (r) => {
+          if (r.isManual) return true;
+          const fmH = Number(r.fmHours ?? 0);
+          const w = Number(r.weeks ?? 0);
+          const fmAmt = Number(r.fm ?? 0);
+          return fmH !== 0 && w !== 0 && fmAmt !== 0;
+        }
+      ),
     [computedDisplayRows]
   );
 
@@ -924,13 +984,11 @@ export default function TanikliStandartPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-normal text-gray-600 dark:text-gray-400 mb-0.5">
-                    Haftada Çalışılan Gün (1-7)
-                  </label>
+                  <label className={labelCls}>Haftada Çalışılan Gün (1-7)</label>
                   <select
                     value={String(weeklyDays)}
                     onChange={(e) => handleFormChange({ weeklyDays: e.target.value })}
-                    className={`${inputCls} text-xs font-normal`}
+                    className={inputCls}
                   >
                     {[1, 2, 3, 4, 5, 6, 7].map((d) => (
                       <option key={d} value={d}>
@@ -960,16 +1018,14 @@ export default function TanikliStandartPage() {
                   />
                 </div>
                 <div className="sm:col-start-3">
-                  <label className="block text-[11px] font-normal text-gray-600 dark:text-gray-400 mb-0.5">
-                    Hafta Tatili Günü (opsiyonel)
-                  </label>
+                  <label className={labelCls}>Hafta Tatili Günü (opsiyonel)</label>
                   <select
                     value={haftaTatiliGunu === "" || haftaTatiliGunu == null ? "" : String(haftaTatiliGunu)}
                     onChange={(e) =>
                       handleFormChange({
                         haftaTatiliGunu: e.target.value === "" ? "" : Number(e.target.value),
                       })}
-                    className={`${inputCls} text-xs font-normal`}
+                    className={inputCls}
                   >
                     <option value="">Seçilmedi (tüm günlerde izin düş)</option>
                     <option value="1">Pazartesi</option>
@@ -1004,65 +1060,67 @@ export default function TanikliStandartPage() {
                 {taniklar.map((t, idx) => (
                   <div
                     key={t.id}
-                    className="flex flex-wrap gap-2 items-end p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
+                    className="flex flex-col gap-2 p-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
                   >
-                    <div className="w-full sm:w-40">
-                      <label className={labelCls}>İsim</label>
-                      <input
-                        type="text"
-                        value={t.name ?? ""}
-                        onChange={(e) => updateWitness(t.id, { name: e.target.value })}
-                        placeholder={`Tanık ${idx + 1}`}
-                        className={inputCls}
-                      />
+                    <div className="flex flex-wrap gap-2 items-end">
+                      <div className="w-full sm:w-40">
+                        <label className={labelCls}>İsim</label>
+                        <input
+                          type="text"
+                          value={t.name ?? ""}
+                          onChange={(e) => updateWitness(t.id, { name: e.target.value })}
+                          placeholder={`Tanık ${idx + 1}`}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[100px]">
+                        <label className={labelCls}>Başlangıç</label>
+                        <input
+                          type="date"
+                          value={t.dateIn}
+                          onChange={(e) => updateWitness(t.id, { dateIn: e.target.value })}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[100px]">
+                        <label className={labelCls}>Bitiş</label>
+                        <input
+                          type="date"
+                          value={t.dateOut}
+                          onChange={(e) => updateWitness(t.id, { dateOut: e.target.value })}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="w-24">
+                        <label className={labelCls}>Giriş</label>
+                        <input
+                          type="time"
+                          value={t.in}
+                          onChange={(e) => updateWitness(t.id, { in: e.target.value })}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="w-24">
+                        <label className={labelCls}>Çıkış</label>
+                        <input
+                          type="time"
+                          value={t.out}
+                          onChange={(e) => updateWitness(t.id, { out: e.target.value })}
+                          className={inputCls}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeWitness(t.id)}
+                        disabled={taniklar.length <= 1}
+                        className="p-2 rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-40"
+                        title="Tanığı kaldır"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <div className="flex-1 min-w-[100px]">
-                      <label className={labelCls}>Başlangıç</label>
-                      <input
-                        type="date"
-                        value={t.dateIn}
-                        onChange={(e) => updateWitness(t.id, { dateIn: e.target.value })}
-                        className={inputCls}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-[100px]">
-                      <label className={labelCls}>Bitiş</label>
-                      <input
-                        type="date"
-                        value={t.dateOut}
-                        onChange={(e) => updateWitness(t.id, { dateOut: e.target.value })}
-                        className={inputCls}
-                      />
-                    </div>
-                    <div className="w-24">
-                      <label className={labelCls}>Giriş</label>
-                      <input
-                        type="time"
-                        value={t.in}
-                        onChange={(e) => updateWitness(t.id, { in: e.target.value })}
-                        className={inputCls}
-                      />
-                    </div>
-                    <div className="w-24">
-                      <label className={labelCls}>Çıkış</label>
-                      <input
-                        type="time"
-                        value={t.out}
-                        onChange={(e) => updateWitness(t.id, { out: e.target.value })}
-                        className={inputCls}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeWitness(t.id)}
-                      disabled={taniklar.length <= 1}
-                      className="p-2 rounded text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-40"
-                      title="Tanığı kaldır"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <div className="w-full flex flex-wrap gap-2 items-end pt-2 mt-1 border-t border-gray-100 dark:border-gray-700/80">
-                      <div className="min-w-[160px] flex-1 sm:flex-none sm:w-44">
+                    <div className="flex flex-wrap gap-3 items-end pt-2 border-t border-gray-100 dark:border-gray-700/80">
+                      <div className="min-w-[10rem] flex-1">
                         <label className="block text-[11px] font-normal text-gray-600 dark:text-gray-400 mb-0.5">
                           Haftada çalışılan gün (FM)
                         </label>
@@ -1164,7 +1222,7 @@ export default function TanikliStandartPage() {
                         {fmPeriods.map((p, idx) => (
                           <div
                             key={idx}
-                            className="p-3 rounded-lg border bg-white dark:bg-gray-800 shadow-sm text-xs leading-snug whitespace-pre-line text-gray-800 dark:text-gray-200"
+                            className="w-full p-3 rounded-lg border bg-white dark:bg-gray-800 shadow-sm text-xs leading-snug whitespace-pre-line text-gray-800 dark:text-gray-200"
                           >
                             {p.text}
                           </div>
@@ -1284,6 +1342,10 @@ export default function TanikliStandartPage() {
               />
             </div>
 
+            <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
+              Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+            </p>
+
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Cetveli</h2>
@@ -1350,7 +1412,7 @@ export default function TanikliStandartPage() {
                           colSpan={9}
                           className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500"
                         >
-                          FM saati 0 olan satırlar gösterilmez; görüntülenecek cetvel satırı yok.
+                          Hafta, FM saati veya fazla mesai tutarı 0 olan satırlar gösterilmez; görüntülenecek cetvel satırı yok.
                         </td>
                       </tr>
                     ) : (

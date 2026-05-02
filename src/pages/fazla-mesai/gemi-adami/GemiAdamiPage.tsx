@@ -3,15 +3,15 @@
  * API: /api/fm/gemi | /api/fm/gemi-full-crew24
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import FooterActions from "@/components/FooterActions";
 import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { usePageStyle } from "@/hooks/usePageStyle";
 import { getVideoLink } from "@/config/videoLinks";
-import { calcWorkPeriodBilirKisi, isoToTR } from "@/utils/dateUtils";
+import { calcWorkPeriodBilirKisi, calculateWeeksBetweenDates, isoToTR } from "@/utils/dateUtils";
 import { apiClient, apiPost } from "@/utils/apiClient";
-import { buildWordTable, adaptToWordTable, copySectionForWord } from "@modules/fazla-mesai/shared";
+import { buildWordTable, adaptToWordTable, copySectionForWord, clampToLastDayOfMonth } from "@modules/fazla-mesai/shared";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
 import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
@@ -23,21 +23,31 @@ import { Copy, Plus, Trash2 } from "lucide-react";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { buildStyledReportTable } from "@/utils/styledReportTable";
 import { useTanikliStandartState } from "../tanikli-standart/state";
+import type { Witness } from "../tanikli-standart/contract";
 import { fmt, fmtCurrency } from "../standart/calculations";
+import { calculateDailyWorkHours, computeBreakHours } from "../standart/utils";
+import { STANDARD_DAILY_REFERENCE_HOURS } from "../standart/constants";
 import { ceilWeeklyWorkHoursToHalfHour } from "@/shared/utils/fazlaMesai/weeklyHoursRounding";
+import { expandGemiRowsAnnualLeaveUbgt, type GemiExpandSourceRow } from "./gemiAnnualLeaveUbgtExpand";
 import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 
-const REDIRECT_BASE = "/fazla-mesai/gemi-adami";
+const REDIRECT_BASE_GUNLUK = "/fazla-mesai/gemi-adami";
+const REDIRECT_BASE_724 = "/fazla-mesai/gemi-7-24";
 const RECORD_GUNLUK = "fazla_mesai_gemi_gunluk";
 const RECORD_724 = "fazla_mesai_gemi_7_24";
 const HAFTALIK_FM_724 = 35;
+const GEMI_WEEKLY_WORK_LIMIT = 48;
+/** Yargıtay 270: her satır FM saatinden (tanık override ile uyum için ön yüzde de uygulanır) */
+const YARGITAY_270_FM_SAAT = 5.2;
 const FAZLA_MESAI_DENOMINATOR = 240;
 const FAZLA_MESAI_KATSAYI = 1.25;
 const GELIR_VERGISI_BIRINCI_DILIM_ORANI = 0.15;
 
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-transparent";
+const tableInputCls =
+  "w-full min-w-0 px-1.5 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right";
 const labelCls = "block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5";
 const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200";
 
@@ -45,6 +55,8 @@ const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
 
 export type GemiRow = {
+  id?: string;
+  isManual?: boolean;
   rangeLabel?: string;
   weeks: number;
   brut: number;
@@ -58,7 +70,16 @@ export type GemiRow = {
   startISO: string;
   endISO: string;
   text?: string;
+  /** UBGT / izin hafta bölmesi (Tanıklı Standart) */
+  dailyNet?: number;
+  annualLeaveHg?: number;
+  annualLeaveSevenDay?: "tatilli" | "tatilsiz";
+  yillikIzinAciklama?: string;
 };
+
+function genGemiRowId(): string {
+  return `gemi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 function normalizeDateInput(iso: string): string {
   if (!iso) return "";
@@ -89,6 +110,18 @@ function formatDateTR(iso: string | undefined): string {
   return `${d.padStart(2, "0")}.${m.padStart(2, "0")}.${y}`;
 }
 
+function resolveWitnessWeeklyDaysGemi(t: Witness, davaciHg: number): number {
+  const raw = t.weeklyDays;
+  if (raw === "" || raw == null) return davaciHg;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 && n <= 7 ? Math.floor(n) : davaciHg;
+}
+
+function resolveWitnessSevenDayModeGemi(t: Witness): "tatilsiz" | "tatilli" {
+  return t.sevenDayMode === "tatilli" ? "tatilli" : "tatilsiz";
+}
+
+/** Sunucu satırları / tanık override sonrası FM ve net tutarını yeniden hesaplar */
 function recalcGemiFmNet(row: GemiRow, fmHours: number, katOverride: number): Pick<GemiRow, "fm" | "net"> {
   const kats = Number.isFinite(katOverride) && katOverride > 0 ? katOverride : row.katsayi || 1;
   const step1 = Number((row.weeks * row.brut).toFixed(6));
@@ -101,7 +134,11 @@ function recalcGemiFmNet(row: GemiRow, fmHours: number, katOverride: number): Pi
   return { fm, net };
 }
 
-export default function GemiAdamiPage() {
+type GemiAdamiPageProps = {
+  forcedMode?: "gunluk" | "724";
+};
+
+export default function GemiAdamiPage({ forcedMode }: GemiAdamiPageProps = {}) {
   const navigate = useNavigate();
   const { id } = useParams<{ id?: string }>();
   const [searchParams] = useSearchParams();
@@ -122,10 +159,13 @@ export default function GemiAdamiPage() {
     updateWitness,
   } = useTanikliStandartState();
 
-  const [gemiMode, setGemiMode] = useState<"gunluk" | "724">("gunluk");
+  const [gemiMode, setGemiMode] = useState<"gunluk" | "724">(forcedMode ?? "gunluk");
   const [activeTab, setActiveTab] = useState<"tatilsiz" | "tatilli">("tatilsiz");
   const [rows, setRows] = useState<GemiRow[]>([]);
-  const [textPeriods, setTextPeriods] = useState<Array<{ startDate?: string; endDate?: string; text?: string }>>([]);
+  const [textPeriods, setTextPeriods] = useState<
+    Array<{ startDate?: string; endDate?: string; text?: string; witnessTitle?: string }>
+  >([]);
+  const [hoveredGemiRow, setHoveredGemiRow] = useState<number | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
   const [haftalikMesaiDisplay, setHaftalikMesaiDisplay] = useState(0);
   const [show270Dropdown, setShow270Dropdown] = useState(false);
@@ -138,14 +178,30 @@ export default function GemiAdamiPage() {
   const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backendRequestIdRef = useRef(0);
 
-  const { iseGiris, istenCikis, weeklyDays, davaci, taniklar, mode270, katSayi, mahsuplasmaMiktari } = formValues;
+  const {
+    iseGiris,
+    istenCikis,
+    weeklyDays,
+    davaci,
+    taniklar,
+    mode270,
+    katSayi,
+    mahsuplasmaMiktari,
+    haftaTatiliGunu,
+  } = formValues;
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
   const include270 = mode270 !== "none";
 
   const recordType = gemiMode === "724" ? RECORD_724 : RECORD_GUNLUK;
+  const redirectBase = gemiMode === "724" ? REDIRECT_BASE_724 : REDIRECT_BASE_GUNLUK;
   const pageTitle =
     gemiMode === "724" ? "Gemi Adamı — 7/24 Çalışan Fazla Mesai" : "Gemi Adamı — Günlük Çalışan Fazla Mesai";
   const videoLink = getVideoLink(gemiMode === "724" ? "fazla-gemi-7-24" : "fazla-gemi");
+
+  useEffect(() => {
+    if (!forcedMode) return;
+    setGemiMode(forcedMode);
+  }, [forcedMode]);
 
   useEffect(() => {
     setLocalIseGiris(iseGiris || "");
@@ -176,9 +232,9 @@ export default function GemiAdamiPage() {
         const d = json.data || {};
         const inner = d.form || d.formValues || d;
         if (mounted) {
-          if (inner.gemiMode === "gunluk" || inner.gemiMode === "724") {
+          if (!forcedMode && (inner.gemiMode === "gunluk" || inner.gemiMode === "724")) {
             setGemiMode(inner.gemiMode);
-          } else {
+          } else if (!forcedMode) {
             setGemiMode(mode724 ? "724" : "gunluk");
           }
         }
@@ -200,7 +256,12 @@ export default function GemiAdamiPage() {
         }));
         const loadedRows = inner.rows;
         if (Array.isArray(loadedRows) && loadedRows.length > 0) {
-          setRows(loadedRows as GemiRow[]);
+          setRows(
+            (loadedRows as GemiRow[]).map((r) => ({
+              ...r,
+              id: r.id ?? genGemiRowId(),
+            }))
+          );
         }
         if (json.name && mounted) setCurrentRecordName(json.name);
         if (mounted) success("Kayıt yüklendi");
@@ -234,20 +295,20 @@ export default function GemiAdamiPage() {
 
   const diff = useMemo(() => calcWorkPeriodBilirKisi(iseGiris, istenCikis), [iseGiris, istenCikis]);
 
+  /** UBGT kataloğu: yalnızca cetvel satırlarının birleşik aralığı (davacı/tanık beyanına göre genişletilmez). */
   const ubgtFmCatalogRange = useMemo(() => {
-    const dIn = (iseGiris || davaci?.dateIn || "").slice(0, 10);
-    const dOut = (istenCikis || davaci?.dateOut || "").slice(0, 10);
-    let start = dIn;
-    let end = dOut;
-    for (const t of taniklar) {
-      const a = (t.dateIn || "").slice(0, 10);
-      const b = (t.dateOut || "").slice(0, 10);
-      if (a && (!start || a < start)) start = a;
-      if (b && (!end || b > end)) end = b;
+    let start = "";
+    let end = "";
+    for (const r of rows) {
+      const s = (r.startISO || "").slice(0, 10);
+      const e = (r.endISO || "").slice(0, 10);
+      if (!s || !e) continue;
+      if (!start || s < start) start = s;
+      if (!end || e > end) end = e;
     }
     if (!start || !end || start > end) return { start: "", end: "" };
     return { start, end };
-  }, [iseGiris, istenCikis, davaci?.dateIn, davaci?.dateOut, taniklar]);
+  }, [rows]);
 
   const handleFormChange = useCallback(
     (updates: Partial<typeof formValues>) => {
@@ -324,6 +385,7 @@ export default function GemiAdamiPage() {
 
           const witnessesPayload = taniklar.map((w) => ({
             id: w.id,
+            name: (w.name || "").trim(),
             dateIn: normalizeDateInput(w.dateIn) || w.dateIn,
             dateOut: normalizeDateInput(w.dateOut) || w.dateOut,
             in: normalizeTimeStr(w.in) || "00:00",
@@ -341,6 +403,7 @@ export default function GemiAdamiPage() {
               katSayi: katSayi || 1,
               zamanasimiBaslangic: zNorm || null,
               include270,
+              mode270,
               haftalikMesai: 0,
               iseGiris: dStart,
               istenCikis: dEnd,
@@ -354,6 +417,7 @@ export default function GemiAdamiPage() {
               katSayi: katSayi || 1,
               zamanasimiBaslangic: zNorm || null,
               include270,
+              mode270,
               haftalikMesai: HAFTALIK_FM_724,
               iseGiris: dStart,
               istenCikis: dEnd,
@@ -378,12 +442,26 @@ export default function GemiAdamiPage() {
           const fromBackend: GemiRow[] = (result.rows || []).map((r: Record<string, unknown>) => {
             const startISO = String(r.startISO ?? r.startDate ?? "");
             const endISO = String(r.endISO ?? r.endDate ?? "");
+            const dailyNetRaw = r.dailyNet ?? r.dailyHours;
+            const dailyNet =
+              dailyNetRaw != null && Number.isFinite(Number(dailyNetRaw)) ? Number(dailyNetRaw) : undefined;
+            const annualLeaveHgRaw = r.annualLeaveHg;
+            const annualLeaveHg =
+              annualLeaveHgRaw != null && Number.isFinite(Number(annualLeaveHgRaw))
+                ? Number(annualLeaveHgRaw)
+                : undefined;
+            const sevenRaw = r.annualLeaveSevenDay;
+            const annualLeaveSevenDay =
+              sevenRaw === "tatilli" || sevenRaw === "tatilsiz" ? sevenRaw : undefined;
             return {
               rangeLabel: String(r.rangeLabel || ""),
               weeks: Number(r.weeks) || 0,
               brut: Number(r.brut) || 0,
               katsayi: Number(r.katsayi) || 1,
               fmHours: Number(r.fmHours) || 0,
+              dailyNet,
+              annualLeaveHg,
+              annualLeaveSevenDay,
               calc225: Number(r.calc225) || 240,
               factor: Number(r.factor) || 1.25,
               fm: Number(r.fm) || 0,
@@ -409,53 +487,88 @@ export default function GemiAdamiPage() {
               const tIn = Math.max(_toMin(t.in), _dIn); const tOut = Math.min(_toMin(t.out), _dOut);
               const brut = Math.max(0, (tOut - tIn) / 60); const brk = _computeBreak(brut);
               const net = Math.max(0, brut - brk);
-              const fm = Math.max(0, ceilWeeklyWorkHoursToHalfHour(net * _hg) - 45);
+              const fm = Math.max(0, ceilWeeklyWorkHoursToHalfHour(net * _hg) - GEMI_WEEKLY_WORK_LIMIT);
               return { startMs: new Date(t.dateIn).getTime(), endMs: new Date(t.dateOut).getTime(), fmHours: fm };
             });
 
-          // Her satır için: o tarihi kapsayan aktif tanıklar arasından en yüksek FM seç
-          const withBestFM = fromBackend.map((row) => {
-            const rS = new Date(row.startISO).getTime(); const rE = new Date(row.endISO).getTime();
-            const active = _tanikFM.filter((t) => t.startMs <= rS && t.endMs >= rE);
-            if (active.length === 0) return row;
-            const best = active.reduce((p, c) => (c.fmHours > p.fmHours ? c : p));
-            if (best.fmHours === row.fmHours) return row;
-            const { fm, net } = recalcGemiFmNet(row, best.fmHours, katSayi || 1);
-            return { ...row, fmHours: best.fmHours, fm, net };
-          });
+          const yargitay270Aktif = include270 && mode270 === "simple";
+          const applyWitnessBestFm = (rowsIn: GemiRow[]): GemiRow[] =>
+            rowsIn.map((row) => {
+              const rS = new Date(row.startISO).getTime();
+              const rE = new Date(row.endISO).getTime();
+              const active = _tanikFM.filter((t) => t.startMs <= rS && t.endMs >= rE);
+              if (active.length === 0) return row;
+              const best = active.reduce((p, c) => (c.fmHours > p.fmHours ? c : p));
+              const bestFmAdjusted = yargitay270Aktif
+                ? Math.max(0, (best.fmHours || 0) - YARGITAY_270_FM_SAAT)
+                : best.fmHours || 0;
+              const rowFm = Number(row.fmHours) || 0;
+              if (Math.abs(bestFmAdjusted - rowFm) < 1e-6) return row;
+              const { fm, net } = recalcGemiFmNet(row, bestFmAdjusted, katSayi || 1);
+              return { ...row, fmHours: bestFmAdjusted, fm, net };
+            });
+
+          const withBestFM = applyWitnessBestFm(fromBackend);
 
           // Ardışık aynı FM saatli satırları birleştir (hafta toplamı doğru olsun)
-          const merged: typeof withBestFM = [];
+          const merged: GemiRow[] = [];
           for (const row of withBestFM) {
             const last = merged[merged.length - 1];
             if (last && last.fmHours === row.fmHours && last.brut === row.brut && last.katsayi === row.katsayi) {
-              const totalWeeks = (last.weeks || 0) + (row.weeks || 0);
+              const mergedStart = (last.startISO || "").slice(0, 10);
+              const mergedEnd = (row.endISO || "").slice(0, 10);
+              let totalWeeks =
+                mergedStart.length >= 10 && mergedEnd.length >= 10
+                  ? Math.max(1, calculateWeeksBetweenDates(mergedStart, mergedEnd) || 1)
+                  : (last.weeks || 0) + (row.weeks || 0);
+              const spanMs = new Date(mergedEnd).getTime() - new Date(mergedStart).getTime();
+              const spanDays = Math.floor(spanMs / 86400000) + 1;
+              if (Number.isFinite(spanDays) && spanDays > 0 && spanDays <= 370) {
+                totalWeeks = Math.min(52, totalWeeks);
+              }
               const { fm, net } = recalcGemiFmNet({ ...last, weeks: totalWeeks }, last.fmHours, katSayi || 1);
               merged[merged.length - 1] = {
                 ...last,
                 endISO: row.endISO,
                 rangeLabel: `${last.rangeLabel?.split(" – ")[0] ?? ""} – ${row.rangeLabel?.split(" – ")[1] ?? ""}`,
                 weeks: totalWeeks,
-                fm: String(fm), net: String(net),
+                fm,
+                net,
               };
             } else {
               merged.push({ ...row });
             }
           }
-          const processedFromBackend = merged;
+          let pipeRows: GemiRow[] = merged;
+          // UBGT / yıllık izin / rapor / diğer dışlamalar: günlük ve 7/24 için aynı blok kuralları (gemiAnnualLeaveUbgtExpand).
+          if (exclusions.length > 0) {
+            const weeklyOffNum =
+              haftaTatiliGunu === "" || haftaTatiliGunu == null ? null : Number(haftaTatiliGunu);
+            pipeRows = expandGemiRowsAnnualLeaveUbgt(merged as GemiExpandSourceRow[], exclusions, {
+              hg: Number(weeklyDays) || 6,
+              weeklyOffDay: Number.isInteger(weeklyOffNum) ? weeklyOffNum : null,
+              davaciSevenDay: activeTab,
+            }) as GemiRow[];
+          }
+          // Tanık FM’si zaten `withBestFM` + birleştirmede uygulandı. Expand sonrası tekrar uygulanırsa
+          // UBGT/yıllık izin haftası satırlarının yeniden hesaplanmış FM saati tanık değeriyle ezilir.
+          const processedFromBackend = pipeRows;
           // ──────────────────────────────────────────────────────────────────────
 
           setRows((prev) => {
-            if (processedFromBackend.length === 0) return processedFromBackend;
-            if (prev.length !== processedFromBackend.length) return processedFromBackend;
-            return processedFromBackend.map((backendRow, idx) => {
-              const cur = prev[idx];
+            const manualRows = prev.filter((r) => r.isManual);
+            const prevApi = prev.filter((r) => !r.isManual);
+            if (processedFromBackend.length === 0) return manualRows;
+            const apiRows = processedFromBackend.map((backendRow, idx) => {
+              const base = { ...backendRow, id: prevApi[idx]?.id ?? genGemiRowId() };
+              const cur = prevApi[idx];
               if (cur?.fmManual && cur.fmHours !== undefined) {
-                const { fm, net } = recalcGemiFmNet(backendRow, cur.fmHours, katSayi || 1);
-                return { ...backendRow, fmHours: cur.fmHours, fm, net, fmManual: true, katsayi: backendRow.katsayi };
+                const { fm, net } = recalcGemiFmNet(base, cur.fmHours, katSayi || 1);
+                return { ...base, fmHours: cur.fmHours, fm, net, fmManual: true, katsayi: base.katsayi };
               }
-              return backendRow;
+              return base;
             });
+            return [...apiRows, ...manualRows];
           });
           setTextPeriods(result.textPeriods || []);
         } catch (e) {
@@ -482,7 +595,9 @@ export default function GemiAdamiPage() {
     katSayi,
     zamanasimiBaslangic,
     include270,
+    mode270,
     gemiMode,
+    haftaTatiliGunu,
   ]);
 
   const stepsText = useMemo(() => {
@@ -491,8 +606,158 @@ export default function GemiAdamiPage() {
     const fromRows = rows.map((r) => r.text || "").filter(Boolean);
     return fromRows.join("\n\n");
   }, [textPeriods, rows]);
+  const fixed724ExplanationText =
+    "7/24 çalışan hesabı:\n" +
+    "7 gün × 24 saat = 168 saat (toplam)\n" +
+    "168 - 77 saat (dinlenme molası) = 91 saat (net çalışma)\n" +
+    "91 - 48 saat (yasal haftalık çalışma) - 8 saat (hafta tatili izni) = 35 saat haftalık fazla mesai";
 
-  const totalBrut = useMemo(() => rows.reduce((a, r) => a + (r.fm || 0), 0), [rows]);
+  /**
+   * Günlük mod: Tanıklı Standart ile aynı — 1 davacı + listedeki her tanık için ayrı kart (tarih dönemi değil, beyan).
+   */
+  const gemiMetinCards = useMemo(() => {
+    if (gemiMode !== "gunluk") return [];
+
+    const fmtH = (n: number) => String(n ?? 0).replace(".", ",");
+    const hg = Number(weeklyDays) || 6;
+    const inT = davaci?.in || "";
+    const outT = davaci?.out || "";
+    const cards: Array<{ key: string; title: string; body: string }> = [];
+
+    if (!inT || !outT) {
+      cards.push({
+        key: "davaci",
+        title: "",
+        body: "Davacı için giriş ve çıkış saatlerini giriniz.",
+      });
+      taniklar.forEach((tanik, idx) => {
+        const tanikName = (tanik.name?.trim() || `TANIK ${idx + 1}`).toUpperCase();
+        cards.push({
+          key: `tanik-${tanik.id}`,
+          title: "",
+          body: `${tanikName}:\nDavacı saatleri girildikten sonra bu tanığın hesap metni gösterilir.`,
+        });
+      });
+      return cards;
+    }
+
+    const brut = calculateDailyWorkHours(inT, outT);
+    const brk = computeBreakHours(brut);
+    const netGunluk = Math.max(0, brut - brk);
+
+    let davaciText: string;
+    if (hg === 7 && activeTab === "tatilli") {
+      const weeklyNormal = 6 * netGunluk;
+      const extraHT = Math.max(0, netGunluk - STANDARD_DAILY_REFERENCE_HOURS);
+      const toplamCalisma = weeklyNormal + extraHT;
+      const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(toplamCalisma);
+      const davaciWeeklyFM = Math.max(0, roundedWeekly - GEMI_WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `6 x ${fmtH(netGunluk)} = ${fmtH(weeklyNormal)} saat çalışma\n` +
+        `${fmtH(netGunluk)} - 7,5 = ${fmtH(extraHT)} saat hafta tatili fazla çalışma\n` +
+        `= ${fmtH(toplamCalisma)} saat haftalık çalışma\n` +
+        `- 48 saat haftalık çalışma saati\n` +
+        `= ${fmt(davaciWeeklyFM)} saat haftalık fazla mesai`;
+    } else if (hg === 7 && activeTab === "tatilsiz") {
+      const weeklyTotal = netGunluk * 7;
+      const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(weeklyTotal);
+      const davaciWeeklyFM = Math.max(0, roundedWeekly - GEMI_WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `7 x ${fmtH(netGunluk)} = ${fmtH(weeklyTotal)} saat çalışma\n` +
+        `= ${fmt(roundedWeekly)} saat haftalık çalışma\n` +
+        `- 48 saat haftalık çalışma saati\n` +
+        `= ${fmt(davaciWeeklyFM)} saat haftalık fazla mesai`;
+    } else {
+      const weeklyTotal = netGunluk * hg;
+      const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(weeklyTotal);
+      const davaciWeeklyFM = Math.max(0, roundedWeekly - GEMI_WEEKLY_WORK_LIMIT);
+      davaciText =
+        `DAVACI:\n` +
+        `${inT} - ${outT} = ${fmtH(brut)} saat çalışma\n` +
+        `- ${fmtH(brk)} saat ara dinlenme\n` +
+        `= ${fmtH(netGunluk)} saat günlük çalışma\n` +
+        `${hg} x ${fmtH(netGunluk)} = ${fmtH(weeklyTotal)} saat çalışma\n` +
+        `= ${fmt(roundedWeekly)} saat haftalık çalışma\n` +
+        `- 48 saat haftalık çalışma saati\n` +
+        `= ${fmt(davaciWeeklyFM)} saat haftalık fazla mesai`;
+    }
+    cards.push({ key: "davaci", title: "", body: davaciText });
+
+    const [dGirH, dGirM] = inT.split(":").map(Number);
+    const [dCikH, dCikM] = outT.split(":").map(Number);
+    const dGirMinutes = dGirH * 60 + dGirM;
+    const dCikMinutes = dCikH * 60 + dCikM;
+
+    taniklar.forEach((tanik, idx) => {
+      const tanikName = (tanik.name?.trim() || `TANIK ${idx + 1}`).toUpperCase();
+      if (!tanik.dateIn || !tanik.dateOut || !tanik.in || !tanik.out) {
+        cards.push({
+          key: `tanik-${tanik.id}`,
+          title: "",
+          body: `${tanikName}:\nTarih aralığı ve giriş–çıkış saatlerini giriniz.`,
+        });
+        return;
+      }
+      const [tGirH, tGirM] = tanik.in.split(":").map(Number);
+      const [tCikH, tCikM] = tanik.out.split(":").map(Number);
+      let tGirMinutes = tGirH * 60 + tGirM;
+      let tCikMinutes = tCikH * 60 + tCikM;
+      tGirMinutes = Math.max(tGirMinutes, dGirMinutes);
+      tCikMinutes = Math.min(tCikMinutes, dCikMinutes);
+      const tDailyBrut = Math.max(0, (tCikMinutes - tGirMinutes) / 60);
+      const tBrk = computeBreakHours(tDailyBrut);
+      const tDailyNet = Math.max(0, tDailyBrut - tBrk);
+      const kesikGir = `${String(Math.floor(tGirMinutes / 60)).padStart(2, "0")}:${String(tGirMinutes % 60).padStart(2, "0")}`;
+      const kesikCik = `${String(Math.floor(tCikMinutes / 60)).padStart(2, "0")}:${String(tCikMinutes % 60).padStart(2, "0")}`;
+
+      const tWorkDays = resolveWitnessWeeklyDaysGemi(tanik, hg);
+      const tSeven = resolveWitnessSevenDayModeGemi(tanik);
+
+      let tanikText: string;
+      if (tWorkDays === 7 && tSeven === "tatilli") {
+        const weeklyNormal = 6 * tDailyNet;
+        const holidayOvertime = Math.max(0, tDailyNet - STANDARD_DAILY_REFERENCE_HOURS);
+        const weeklyTotal = weeklyNormal + holidayOvertime;
+        const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(weeklyTotal);
+        const tWeeklyFM = Math.max(0, roundedWeekly - GEMI_WEEKLY_WORK_LIMIT);
+        tanikText =
+          `${tanikName}:\n` +
+          `${kesikGir} - ${kesikCik} = ${fmtH(tDailyBrut)} saat çalışma\n` +
+          `- ${fmtH(tBrk)} saat ara dinlenme\n` +
+          `= ${fmtH(tDailyNet)} saat günlük çalışma\n` +
+          `6 x ${fmtH(tDailyNet)} = ${fmtH(weeklyNormal)} saat çalışma\n` +
+          `${fmtH(tDailyNet)} - 7,5 = ${fmtH(holidayOvertime)} saat hafta tatili fazla çalışma\n` +
+          `= ${fmtH(weeklyTotal)} saat çalışma\n` +
+          `Net haftalık çalışma = ${fmt(roundedWeekly)} saat,\n` +
+          `${fmt(roundedWeekly)} – 48 saat yasal haftalık çalışma = ${fmt(tWeeklyFM)} saat haftalık fazla mesai`;
+      } else {
+        const tWeeklyTotal = tDailyNet * tWorkDays;
+        const roundedWeekly = ceilWeeklyWorkHoursToHalfHour(tWeeklyTotal);
+        const tWeeklyFM = Math.max(0, roundedWeekly - GEMI_WEEKLY_WORK_LIMIT);
+        tanikText =
+          `${tanikName}:\n` +
+          `${kesikGir} - ${kesikCik} = ${fmtH(tDailyBrut)} saat çalışma\n` +
+          `- ${fmtH(tBrk)} saat ara dinlenme\n` +
+          `= ${fmtH(tDailyNet)} saat günlük çalışma\n` +
+          `${tWorkDays} x ${fmtH(tDailyNet)} = ${fmtH(tWeeklyTotal)} saat çalışma\n` +
+          `Net haftalık çalışma = ${fmt(roundedWeekly)} saat,\n` +
+          `${fmt(roundedWeekly)} – 48 saat yasal haftalık çalışma = ${fmt(tWeeklyFM)} saat haftalık fazla mesai`;
+      }
+      cards.push({ key: `tanik-${tanik.id}`, title: "", body: tanikText });
+    });
+
+    return cards;
+  }, [gemiMode, davaci?.in, davaci?.out, taniklar, weeklyDays, activeTab]);
+
+  const totalBrut = useMemo(() => rows.reduce((a, r) => a + (Number(r.fm) || 0), 0), [rows]);
 
   const exitYear = istenCikis ? new Date(istenCikis).getFullYear() : new Date().getFullYear();
   const brutNetResult = useMemo(() => {
@@ -522,18 +787,71 @@ export default function GemiAdamiPage() {
   const sonNet = Math.max(0, totalBrut - hakkaniyetIndirimi - mahsupNum);
   const hasCustomKatsayi = (katSayi ?? 1) !== 1 && (katSayi ?? 1) > 0;
 
-  const updateRowFmHours = useCallback(
-    (idx: number, fmHours: number) => {
+  const applyGemiRowPatch = useCallback(
+    (rowId: string, patch: Partial<GemiRow>) => {
       setRows((prev) =>
-        prev.map((r, i) => {
-          if (i !== idx) return r;
-          const { fm, net } = recalcGemiFmNet(r, fmHours, katSayi || 1);
-          return { ...r, fmHours, fm, net, fmManual: true };
+        prev.map((r) => {
+          if ((r.id || "") !== rowId) return r;
+          const next: GemiRow = { ...r, ...patch };
+          const s = (next.startISO || "").slice(0, 10);
+          const e = (next.endISO || "").slice(0, 10);
+          if ((patch.startISO != null || patch.endISO != null) && s.length >= 10 && e.length >= 10) {
+            let w = Math.max(1, calculateWeeksBetweenDates(s, e) || 1);
+            const spanMs = new Date(e).getTime() - new Date(s).getTime();
+            const spanDays = Math.floor(spanMs / 86400000) + 1;
+            if (Number.isFinite(spanDays) && spanDays > 0 && spanDays <= 370) {
+              w = Math.min(52, w);
+            }
+            next.weeks = w;
+            next.rangeLabel = `${formatDateTR(s)}–${formatDateTR(e)}`;
+          }
+          const fmH = Number(next.fmHours) || 0;
+          const k = Number(next.katsayi) || 1;
+          const { fm, net } = recalcGemiFmNet({ ...next, katsayi: k }, fmH, katSayi || 1);
+          return { ...next, katsayi: k, fm, net, fmManual: true };
         })
       );
     },
     [katSayi]
   );
+
+  const addGemiRow = useCallback(
+    (afterRowId?: string) => {
+      const blank: GemiRow = {
+        id: genGemiRowId(),
+        isManual: true,
+        rangeLabel: "",
+        weeks: 0,
+        brut: 0,
+        katsayi: katSayi ?? 1,
+        fmHours: 0,
+        calc225: 240,
+        factor: 1.25,
+        fm: 0,
+        net: 0,
+        startISO: "",
+        endISO: "",
+      };
+      const { fm, net } = recalcGemiFmNet(blank, 0, katSayi || 1);
+      const newRow: GemiRow = { ...blank, fm, net };
+      setRows((prev) => {
+        if (!afterRowId) return [...prev, newRow];
+        const idx = prev.findIndex((x) => x.id === afterRowId);
+        if (idx < 0) return [...prev, newRow];
+        const out = [...prev];
+        out.splice(idx + 1, 0, newRow);
+        return out;
+      });
+    },
+    [katSayi]
+  );
+
+  const removeGemiRow = useCallback((rowId: string) => {
+    setRows((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((r) => r.id !== rowId);
+    });
+  }, []);
 
   const handleSave = useCallback(() => {
     kaydetAc({
@@ -546,7 +864,7 @@ export default function GemiAdamiPage() {
             activeTab,
             rows,
             pageType: "gemi-adami",
-            route: REDIRECT_BASE,
+            route: redirectBase,
           },
           results: { rows, totalBrut, totalNet: brutNetResult.netYillik, weeklyFMHours: haftalikMesaiDisplay },
         },
@@ -561,7 +879,7 @@ export default function GemiAdamiPage() {
       },
       mevcutId: effectiveId || undefined,
       mevcutKayitAdi: currentRecordName || undefined,
-      redirectPath: `${REDIRECT_BASE}/:id`,
+      redirectPath: `${redirectBase}/:id`,
     });
   }, [
     kaydetAc,
@@ -583,13 +901,13 @@ export default function GemiAdamiPage() {
   ]);
 
   const handleNew = useCallback(() => {
-    if (effectiveId) navigate(REDIRECT_BASE);
-  }, [effectiveId, navigate]);
+    if (effectiveId) navigate(redirectBase);
+  }, [effectiveId, navigate, redirectBase]);
 
   const modeBlurb =
     gemiMode === "724"
       ? "7/24 çalışan gemi adamı: haftalık fazla mesai sunucuda 35 saat sabit; bölücü 240, çarpan 1,25."
-      : "Günlük çalışan gemi adamı: haftalık limit 48 saat; ara dinlenme ve haftalık gün sayısına göre FM saati hesaplanır (bölücü 240, çarpan 1,25).";
+      : "Günlük çalışan gemi adamı: haftalık yasal çalışma 48 saat; ara dinlenme ve haftalık gün sayısına göre FM saati hesaplanır (bölücü 240, çarpan 1,25).";
 
   const wordTableSections = useMemo(() => {
     const s: Array<{ id: string; title: string; html: string; htmlForPdf: string }> = [];
@@ -613,8 +931,11 @@ export default function GemiAdamiPage() {
     });
 
     const cetvelHeaders = ["Dönem", "Hafta", "Ücret", "Kat", "FM Saat", "240", "1,25", "FM"];
-    const cetvelRows = rows.map((r) => [
-      r.rangeLabel || `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}`,
+    const cetvelRows = rows.map((r) => {
+      const periodLabel = r.rangeLabel || `${formatDateTR(r.startISO)} – ${formatDateTR(r.endISO)}`;
+      const periodWithNote = r.yillikIzinAciklama ? `${periodLabel} ${r.yillikIzinAciklama}` : periodLabel;
+      return [
+      periodWithNote,
       r.weeks ?? 0,
       fmt(r.brut ?? 0),
       r.katsayi ?? 1,
@@ -622,7 +943,8 @@ export default function GemiAdamiPage() {
       "240",
       "1,25",
       fmt(r.fm ?? 0),
-    ]);
+    ];
+    });
     cetvelRows.push(["", "", "", "", "", "", "Toplam", fmt(totalBrut)]);
     const n2 = adaptToWordTable({ headers: cetvelHeaders, rows: cetvelRows });
     s.push({
@@ -748,14 +1070,28 @@ export default function GemiAdamiPage() {
           <div className="p-4 sm:p-5 space-y-5">
             <div className="rounded-lg border border-sky-200 dark:border-sky-800 bg-sky-50/80 dark:bg-sky-950/20 p-3">
               <label className={`${labelCls} text-sky-900 dark:text-sky-200`}>Çalışma şekli</label>
-              <select
-                value={gemiMode}
-                onChange={(e) => setGemiMode(e.target.value as "gunluk" | "724")}
-                className={inputCls}
-              >
-                <option value="gunluk">Günlük çalışan (giriş–çıkış saatleri, haftalık 48 saat limiti)</option>
-                <option value="724">7/24 çalışan (sabit 35 saat haftalık FM)</option>
-              </select>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  to="/fazla-mesai/gemi-adami"
+                  className={`px-3 py-1.5 rounded-md border text-sm ${
+                    gemiMode === "gunluk"
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+                  }`}
+                >
+                  Günlük çalışan
+                </Link>
+                <Link
+                  to="/fazla-mesai/gemi-7-24"
+                  className={`px-3 py-1.5 rounded-md border text-sm ${
+                    gemiMode === "724"
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+                  }`}
+                >
+                  7/24 çalışan
+                </Link>
+              </div>
               <p className="text-xs text-sky-900/80 dark:text-sky-200/80 mt-2">{modeBlurb}</p>
             </div>
 
@@ -804,36 +1140,34 @@ export default function GemiAdamiPage() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                <div>
-                  <label className={labelCls}>Giriş saati</label>
-                  <input
-                    type="time"
-                    value={davaci?.in ?? ""}
-                    onChange={(e) => handleFormChange({ davaci: { ...davaci, in: e.target.value } })}
-                    className={inputCls}
-                  />
+              {gemiMode === "gunluk" && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+                  <div>
+                    <label className={labelCls}>Giriş saati</label>
+                    <input
+                      type="time"
+                      value={davaci?.in ?? ""}
+                      onChange={(e) => handleFormChange({ davaci: { ...davaci, in: e.target.value } })}
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Çıkış saati</label>
+                    <input
+                      type="time"
+                      value={davaci?.out ?? ""}
+                      onChange={(e) => handleFormChange({ davaci: { ...davaci, out: e.target.value } })}
+                      className={inputCls}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className={labelCls}>Çıkış saati</label>
-                  <input
-                    type="time"
-                    value={davaci?.out ?? ""}
-                    onChange={(e) => handleFormChange({ davaci: { ...davaci, out: e.target.value } })}
-                    className={inputCls}
-                  />
-                </div>
-              </div>
+              )}
               {gemiMode === "gunluk" && (
                 <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                   Günlük modda giriş ve çıkış saatleri zorunludur.
                 </p>
               )}
-              {gemiMode === "724" && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                  7/24 modda saat alanları isteğe bağlıdır; boş bırakılırsa 00:00 gönderilir.
-                </p>
-              )}
+              {gemiMode === "724" && <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">7/24 modda saat alanları kullanılmaz.</p>}
             </section>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
@@ -848,7 +1182,10 @@ export default function GemiAdamiPage() {
                   Tanık ekle
                 </button>
               </div>
-              <p className="text-xs text-gray-500 mb-3">Tanık tarihleri davacı dönemine göre sunucuda kırpılır.</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Tanık tarihleri davacı dönemine göre sunucuda kırpılır.
+                {gemiMode === "724" ? " 7/24 modda tanık saat girişleri kullanılmaz." : ""}
+              </p>
               <div className="space-y-3">
                 {taniklar.map((t, idx) => (
                   <div
@@ -873,14 +1210,18 @@ export default function GemiAdamiPage() {
                       <label className={labelCls}>Bitiş</label>
                       <input type="date" value={t.dateOut} onChange={(e) => updateWitness(t.id, { dateOut: e.target.value })} className={inputCls} />
                     </div>
-                    <div className="w-24">
-                      <label className={labelCls}>Giriş</label>
-                      <input type="time" value={t.in} onChange={(e) => updateWitness(t.id, { in: e.target.value })} className={inputCls} />
-                    </div>
-                    <div className="w-24">
-                      <label className={labelCls}>Çıkış</label>
-                      <input type="time" value={t.out} onChange={(e) => updateWitness(t.id, { out: e.target.value })} className={inputCls} />
-                    </div>
+                    {gemiMode === "gunluk" && (
+                      <>
+                        <div className="w-24">
+                          <label className={labelCls}>Giriş</label>
+                          <input type="time" value={t.in} onChange={(e) => updateWitness(t.id, { in: e.target.value })} className={inputCls} />
+                        </div>
+                        <div className="w-24">
+                          <label className={labelCls}>Çıkış</label>
+                          <input type="time" value={t.out} onChange={(e) => updateWitness(t.id, { out: e.target.value })} className={inputCls} />
+                        </div>
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeWitness(t.id)}
@@ -921,19 +1262,65 @@ export default function GemiAdamiPage() {
               </div>
             )}
 
-            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
-              <details open className="group">
-                <summary className="cursor-pointer px-4 py-3 text-sm font-medium bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-600 list-none">
-                  Metin / adımlar (sunucu)
-                </summary>
-                <div className="p-4">
-                  {isCalculating && <p className="text-xs text-gray-500 mb-2">Hesaplanıyor…</p>}
-                  <pre className="text-xs whitespace-pre-wrap font-mono bg-gray-100 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-600 rounded-lg p-3 text-gray-800 dark:text-gray-200">
-                    {stepsText || modeBlurb}
-                  </pre>
-                </div>
-              </details>
-            </section>
+            {gemiMode === "gunluk" ? (
+              <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
+                <details className="group" open>
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-600 flex items-center justify-between list-none">
+                    <span>Metin Hesaplaması</span>
+                    <svg
+                      className="w-4 h-4 transition-transform group-open:rotate-180"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      aria-hidden
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </summary>
+                  <div className="p-4">
+                    {isCalculating && <p className="text-xs text-gray-500 mb-2">Hesaplanıyor…</p>}
+                    <p className="text-xs text-red-600 dark:text-red-400 font-medium mb-3">
+                      Aşağıdaki metin kartları yalnızca davacı ve tanık beyanlarına göre üretilir (Tanıklı Standart ile aynı yapı). Cetvel satırları sunucuda dönemsel olarak hesaplanır; haftalık yasal çalışma 48 saattir.
+                    </p>
+                    <div className="bg-[#f1f3f5] dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
+                      {gemiMetinCards.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                          {gemiMetinCards.map((c) => (
+                            <div
+                              key={c.key}
+                              className="p-3 rounded-lg border bg-white dark:bg-gray-800 shadow-sm text-xs leading-snug whitespace-pre-line text-gray-800 dark:text-gray-200"
+                            >
+                              {c.title ? (
+                                <p className="font-semibold text-gray-700 dark:text-gray-300 mb-2 whitespace-pre-line">{c.title}</p>
+                              ) : null}
+                              {c.body}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          Tarih ve davacı giriş/çıkış saatlerini giriniz.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </details>
+              </section>
+            ) : (
+              <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
+                <details open className="group">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-600 list-none">
+                    Metin / adımlar
+                  </summary>
+                  <div className="p-4">
+                    {isCalculating && <p className="text-xs text-gray-500 mb-2">Hesaplanıyor…</p>}
+                    <pre className="text-xs whitespace-pre-wrap font-mono bg-gray-100 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-600 rounded-lg p-3 text-gray-800 dark:text-gray-200">
+                      {fixed724ExplanationText || stepsText || modeBlurb}
+                    </pre>
+                  </div>
+                </details>
+              </section>
+            )}
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
               <div className="flex flex-wrap items-center gap-2">
@@ -1005,7 +1392,7 @@ export default function GemiAdamiPage() {
                 </button>
               </div>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                270 ve zamanaşımı sunucuda gemi usulüne göre uygulanır; şirket/Yargıtay ayrımı kayıtta saklanır, API yalnızca düşümün açık/kapalı olduğunu kullanır.
+                270 ve zamanaşımı sunucuda uygulanır: Yargıtay seçeneğinde hafta değişmez, FM saatinden 5 saat 12 dakika düşülür; Şirket seçeneğinde hafta düşümü uygulanır.
               </p>
             </section>
 
@@ -1020,64 +1407,190 @@ export default function GemiAdamiPage() {
               />
             </div>
 
-            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800">
+            <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
+              Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+            </p>
+
+            <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
-                <h2 className={sectionTitleCls}>Fazla mesai cetveli</h2>
+                <h2 className={sectionTitleCls}>Fazla Mesai Hesaplama Cetveli</h2>
               </div>
               <ZamanasimiCetvelBanner nihaiBaslangic={zamanasimiBaslangic} />
-              <div className="overflow-x-auto p-2">
-                <table className="w-full text-xs border-collapse min-w-[680px] text-gray-900 dark:text-gray-100">
+              <div className="overflow-x-auto">
+                <table
+                  className="w-full text-xs border-collapse font-sans table-fixed text-gray-900 dark:text-gray-100"
+                  style={{ minWidth: "640px" }}
+                >
+                  <colgroup>
+                    <col style={{ width: "30%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "6%" }} />
+                  </colgroup>
                   <thead>
                     <tr className="bg-gray-100 dark:bg-gray-700">
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-left">Dönem</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">Hafta</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">Ücret</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">Kat</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">FM saat</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">240</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">1,25</th>
-                      <th className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">FM</th>
+                      <th className="px-2 py-1.5 text-left border border-gray-200 dark:border-gray-600 font-semibold">
+                        Tarih Aralığı
+                      </th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">Hafta</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">Ücret</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">Kat</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">FM Saati</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">240</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">1,25</th>
+                      <th className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-600 font-semibold">Fazla Mesai</th>
+                      <th className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" aria-label="Satır işlemleri" />
                     </tr>
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="border border-gray-200 dark:border-gray-600 px-2 py-6 text-center text-gray-500">
-                          {gemiMode === "gunluk" && (!normalizeTimeStr(davaci?.in) || !normalizeTimeStr(davaci?.out))
-                            ? "Tarih ve davacı giriş/çıkış saatlerini girin."
+                        <td colSpan={9} className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500">
+                          {gemiMode === "gunluk"
+                            ? !normalizeTimeStr(davaci?.in) || !normalizeTimeStr(davaci?.out)
+                              ? "Tarih ve davacı giriş/çıkış saatlerini girin."
+                              : "Tarih aralığını girin."
                             : "Tarih aralığını girin."}
                         </td>
                       </tr>
                     ) : (
                       rows.map((r, i) => (
-                        <tr key={`${r.startISO}-${r.endISO}-${i}`}>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1">
-                            {r.rangeLabel || `${formatDateTR(r.startISO)}–${formatDateTR(r.endISO)}`}
+                        <tr
+                          key={r.id || `${r.startISO}-${r.endISO}-${i}`}
+                          className="hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                          onMouseEnter={() => setHoveredGemiRow(i)}
+                          onMouseLeave={() => setHoveredGemiRow(null)}
+                        >
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600 align-top">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="date"
+                                value={(r.startISO || "").slice(0, 10)}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  if (!r.id) return;
+                                  applyGemiRowPatch(r.id, { startISO: raw ? clampToLastDayOfMonth(raw) : "" });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                              <span className="text-gray-400 shrink-0">–</span>
+                              <input
+                                type="date"
+                                value={(r.endISO || "").slice(0, 10)}
+                                onChange={(e) => {
+                                  const raw = e.target.value || "";
+                                  if (!r.id) return;
+                                  applyGemiRowPatch(r.id, { endISO: raw ? clampToLastDayOfMonth(raw) : "" });
+                                }}
+                                className={`${tableInputCls} flex-1 min-w-0 text-left`}
+                              />
+                            </div>
+                            {r.yillikIzinAciklama ? (
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight">
+                                {r.yillikIzinAciklama}
+                              </div>
+                            ) : null}
                           </td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">{r.weeks}</td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">{fmt(r.brut)}</td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">{r.katsayi}</td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
                             <input
                               type="number"
-                              step="0.5"
-                              className="w-20 px-1 py-0.5 text-right rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
-                              value={r.fmHours}
-                              onChange={(e) => updateRowFmHours(i, parseFloat(e.target.value) || 0)}
+                              min={0}
+                              step={1}
+                              value={r.weeks ?? 0}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value, 10);
+                                if (!r.id) return;
+                                applyGemiRowPatch(r.id, { weeks: Number.isNaN(v) ? 0 : Math.max(0, v) });
+                              }}
+                              className={tableInputCls}
                             />
                           </td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">240</td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right">1,25</td>
-                          <td className="border border-gray-200 dark:border-gray-600 px-2 py-1 text-right font-medium">{fmt(r.fm)}</td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={r.brut ?? 0}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value.replace(",", "."));
+                                if (!r.id) return;
+                                applyGemiRowPatch(r.id, { brut: Number.isNaN(v) ? 0 : Math.max(0, v) });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.0001}
+                              value={r.katsayi ?? 1}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value.replace(",", "."));
+                                if (!r.id) return;
+                                applyGemiRowPatch(r.id, { katsayi: Number.isNaN(v) || v <= 0 ? 1 : v });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-1 py-1 border border-gray-200 dark:border-gray-600">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.5}
+                              value={r.fmHours ?? 0}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value.replace(",", "."));
+                                if (!r.id) return;
+                                applyGemiRowPatch(r.id, { fmHours: Number.isNaN(v) ? 0 : Math.max(0, v) });
+                              }}
+                              className={tableInputCls}
+                            />
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">240</td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right">1,25</td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600 text-right font-medium whitespace-nowrap">
+                            {fmt(Number(r.fm) || 0)}
+                          </td>
+                          <td className="px-2 py-1 border border-gray-200 dark:border-gray-600">
+                            {hoveredGemiRow === i && r.id ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => addGemiRow(r.id)}
+                                  className="w-6 h-6 rounded flex items-center justify-center text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/40 font-medium"
+                                  aria-label="Satır ekle"
+                                >
+                                  +
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeGemiRow(r.id)}
+                                  disabled={rows.length <= 1}
+                                  className="w-6 h-6 rounded flex items-center justify-center text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-40 font-medium"
+                                  aria-label="Satırı sil"
+                                >
+                                  −
+                                </button>
+                              </div>
+                            ) : null}
+                          </td>
                         </tr>
                       ))
                     )}
                     {rows.length > 0 && (
-                      <tr className="bg-indigo-50 dark:bg-indigo-900/20 font-semibold">
-                        <td colSpan={7} className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">
-                          Toplam
+                      <tr className="bg-indigo-50 dark:bg-indigo-900/30 font-semibold">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600">Toplam Fazla Mesai:</td>
+                        <td colSpan={6} className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600 text-right whitespace-nowrap">
+                          {fmtCurrency(totalBrut)}
                         </td>
-                        <td className="border border-gray-200 dark:border-gray-600 px-2 py-1.5 text-right">{fmtCurrency(totalBrut)}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-600" />
                       </tr>
                     )}
                   </tbody>
@@ -1131,7 +1644,24 @@ export default function GemiAdamiPage() {
                   Mahsuplaşma ekle
                 </button>
               </div>
-              <p className="text-sm font-semibold mt-3">Son net: {fmtCurrency(sonNet)}</p>
+              <div className="divide-y divide-pink-200/70 dark:divide-pink-800/60 text-xs sm:text-sm mt-3">
+                <div className="flex justify-between py-1.5">
+                  <span>Toplam fazla mesai (brüt)</span>
+                  <span>{fmtCurrency(totalBrut)}</span>
+                </div>
+                <div className="flex justify-between py-1.5 text-red-700 dark:text-red-300">
+                  <span>1/3 hakkaniyet indirimi</span>
+                  <span>-{fmtCurrency(hakkaniyetIndirimi)}</span>
+                </div>
+                <div className="flex justify-between py-1.5 text-red-700 dark:text-red-300">
+                  <span>Mahsuplaşma miktarı</span>
+                  <span>-{fmtCurrency(mahsupNum)}</span>
+                </div>
+                <div className="flex justify-between py-2 font-semibold text-emerald-700 dark:text-emerald-300">
+                  <span>Son net</span>
+                  <span>{fmtCurrency(sonNet)}</span>
+                </div>
+              </div>
             </section>
 
             <NotlarAccordion />

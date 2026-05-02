@@ -32,7 +32,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Belirli Süreli Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Belirli Süreli Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_belirli";
 const REDIRECT_PATH = "/yillik-izin/belirli";
@@ -758,14 +758,8 @@ export default function YillikIzinBelirliPage() {
         <ReportContentFromConfig config={belirliReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Belirli Süreli Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">4857 — belirli süreli sözleşme, çoklu dönem ve standart izin dilimleri</p>
-          </div>
           {videoLink && (
             <Button
               type="button"

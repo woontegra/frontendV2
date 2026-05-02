@@ -37,7 +37,7 @@ const cardStyles: Record<
 export default function UbgtSelectionPage() {
   return (
     <div className="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900 px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <div className="mb-8 sm:mb-10 text-center">
           <h1 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white">UBGT alacağı</h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Hesaplama türünü seçin</p>

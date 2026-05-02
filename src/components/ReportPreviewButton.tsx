@@ -266,7 +266,11 @@ export default function ReportPreviewButton({ title, renderContent, buttonClassN
             </div>
             {!isMinimized && hasContent && (
               <div className="p-5 text-sm overflow-auto bg-gray-50/50 dark:bg-gray-900/30" style={{ maxHeight: isMaximized ? 'calc(100vh - 56px)' : '80vh' }}>
-                <div id="report-modal-content" ref={raporRef as any} className="report-preview-content">
+                <div
+                  id="report-modal-content"
+                  ref={raporRef as any}
+                  className="report-preview-content space-y-4 text-gray-900 dark:text-gray-100 [&_table]:w-full [&_table]:table-auto [&_table]:border-collapse [&_table]:border [&_table]:border-gray-400 [&_table]:text-xs sm:[&_table]:text-sm dark:[&_table]:border-gray-500 [&_table_td]:border [&_table_td]:border-gray-300 [&_table_td]:px-2 [&_table_td]:py-1.5 [&_table_td]:align-top dark:[&_table_td]:border-gray-600 [&_table_th]:border [&_table_th]:border-gray-300 [&_table_th]:bg-gray-100 [&_table_th]:px-2 [&_table_th]:py-1.5 [&_table_th]:text-left [&_table_th]:font-semibold dark:[&_table_th]:border-gray-600 dark:[&_table_th]:bg-gray-800/80"
+                >
                   {renderContent()}
                 </div>
               </div>

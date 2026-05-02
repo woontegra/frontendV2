@@ -40,7 +40,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | İş Kanununa Göre Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | İş Kanununa Göre Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_standart";
 const REDIRECT_PATH = "/yillik-izin/standart";
@@ -868,14 +868,8 @@ export default function YillikIzinStandartPage() {
         <ReportContentFromConfig config={yillikIzinReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              İş Kanununa Göre Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">4857 sayılı Kanun — standart yıllık ücretli izin</p>
-          </div>
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
           {videoLink && (
             <Button
               type="button"
@@ -987,7 +981,7 @@ export default function YillikIzinStandartPage() {
             </div>
 
             <div className="p-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900/30">
-              <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2">Yıllık İzin Hesaplama</div>
+              <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2">Hesap Özeti</div>
               <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
                 <div>
                   {breakdown.daysPerYear1 ?? 14} × {breakdown.y1} ={" "}

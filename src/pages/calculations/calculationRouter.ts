@@ -71,11 +71,15 @@ export function getRouteForCalculationType(type: string, data?: Record<string, u
     if (t.includes("tanikli") || pageType.includes("tanikli")) return "/fazla-mesai/tanikli-standart";
     if (t.includes("yeralti") || t.includes("yeraltı")) return "/fazla-mesai/yeralti-isci";
     if (t.includes("vardiya")) {
-      if (t.includes("48") || t.includes("24")) return "/fazla-mesai/vardiya-24-48";
+      if (t.includes("48")) return "/fazla-mesai/vardiya-48";
+      if (t.includes("24")) return "/fazla-mesai/vardiya-24";
       if (t.includes("12")) return "/fazla-mesai/vardiya12";
       return "/fazla-mesai/vardiya-24-48";
     }
-    if (t.includes("gemi")) return "/fazla-mesai/gemi-adami";
+    if (t.includes("gemi")) {
+      if (t.includes("7_24") || t.includes("7-24")) return "/fazla-mesai/gemi-7-24";
+      return "/fazla-mesai/gemi-adami";
+    }
     if (t.includes("ev")) return "/fazla-mesai/ev";
     if (t.includes("basin") || t.includes("basın")) return "/fazla-mesai/basin-is-fazla-mesai";
     if (t.includes("fazla_sure") || t.includes("fazla_süre")) return "/fazla-mesai/fazla-surelerle-calisma";

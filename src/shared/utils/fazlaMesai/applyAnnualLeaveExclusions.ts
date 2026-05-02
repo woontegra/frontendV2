@@ -15,6 +15,10 @@ export interface RowWithExclusionFields {
   brut: number;
   katsayi: number;
   fmHours: number;
+  totalDays?: number;
+  excludedDays?: number;
+  workedDays?: number;
+  dailyNet?: number;
   rangeLabel?: string;
   [key: string]: unknown;
 }
@@ -42,16 +46,16 @@ function ubgExtraBalanceDays(rowStart: Date, rowEnd: Date, exclusions: ExcludedD
 }
 
 /**
- * Satır listesine dışlama uygular.
- * Örtüşen takvim günü ağırlığı (UBGT `days` dahil) satırın gün sayısından düşülür;
- * kalan oran `weeks` ile çarpılarak yeni hafta ve FM hesaplanır.
+ * Satır listesine dışlama uygular (gün bazlı).
+ * Örtüşen takvim günleri tekilleştirilir; UBGT tek gün `days>1` ise bilanço günü eklenir.
+ * Hafta oranı düşümü yapılmaz, yalnız `totalDays/excludedDays/workedDays` alanları güncellenir.
  */
 export function applyAnnualLeaveExclusions<T extends RowWithExclusionFields>(
   rows: T[],
   exclusions: ExcludedDay[] | null | undefined,
   options: ApplyAnnualLeaveExclusionsOptions = {}
 ): T[] {
-  const { minWeeks = 0 } = options;
+  void options;
 
   if (!exclusions || exclusions.length === 0) {
     return rows;
@@ -72,22 +76,11 @@ export function applyAnnualLeaveExclusions<T extends RowWithExclusionFields>(
     const rowCalendarDays = Math.max(1, differenceInCalendarDays(rowEnd, rowStart) + 1);
     totalWeightedDays = Math.min(totalWeightedDays, rowCalendarDays);
 
-    const productiveDays = Math.max(0, rowCalendarDays - totalWeightedDays);
-    const rw = Number(row.weeks) || 0;
-
-    let newWeeks: number;
-    if (productiveDays <= 0) {
-      newWeeks = Math.max(0, minWeeks);
-    } else {
-      newWeeks = rw * (productiveDays / rowCalendarDays);
-    }
-
-    const newFm = (newWeeks * row.brut * row.katsayi * row.fmHours) / 225 * 1.5;
-
     return {
       ...row,
-      weeks: newWeeks,
-      fm: Number(newFm.toFixed(2)),
+      totalDays: rowCalendarDays,
+      excludedDays: totalWeightedDays,
+      workedDays: Math.max(0, rowCalendarDays - totalWeightedDays),
     };
   });
 }

@@ -7,21 +7,18 @@
  * o satır için bu değerler kullanılır; yoksa çağrıdaki `hg` ve `davaciSevenDay` uygulanır.
  */
 
-import { addDays, startOfDay, startOfWeek } from "date-fns";
+import { addDays, startOfDay } from "date-fns";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
 import { countAnnualLeaveCalendarDaysInWindow } from "@/shared/utils/fazlaMesai/annualLeaveCalendarDays";
+import { splitByExclusionsBlocks } from "@/shared/utils/fm/blockSplitter";
 import type { FazlaMesaiRowBase } from "@modules/fazla-mesai/shared";
 import { getAsgariUcretByDate } from "@modules/fazla-mesai/shared";
-import { bilirkisiRoundWeeklyTotalHours } from "../standart/annualLeaveSixDayRowSplit";
 import {
   FAZLA_MESAI_DENOMINATOR,
   FAZLA_MESAI_KATSAYI,
   WEEKLY_WORK_LIMIT,
-  STANDARD_DAILY_REFERENCE_HOURS,
 } from "../standart/constants";
 import { DAMGA_VERGISI_ORANI, GELIR_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
-
-const EPS = 1e-7;
 
 /** FM haftalık düşümünde takvim olarak sayılan dışlama türleri. */
 const FM_EXCLUSION_TYPES: string[] = ["Yıllık İzin", "UBGT", "Rapor", "Diğer"];
@@ -63,43 +60,18 @@ function formatFmDeductionCaption(
   return `(${n} gün dışlama düşülmüştür: yıllık izin / UBGT / diğer)`;
 }
 
-/** Davacı haftası (hg) ve 7 gün iken tatilli/tatilsiz; izin günü düşümüyle ham haftalık çalışma saati. */
-function weeklyRawHoursForDavaciLeaveWeek(
-  dailyNet: number,
-  hgSafe: number,
-  davaciSevenDay: "tatilli" | "tatilsiz",
-  leaveDaysInt: number
-): number {
-  const L = Math.max(0, Math.min(7, Math.floor(leaveDaysInt)));
-  if (hgSafe !== 7) {
-    return Math.max(0, (hgSafe - L) * dailyNet);
-  }
-  if (davaciSevenDay === "tatilsiz") {
-    return Math.max(0, (7 - L) * dailyNet);
-  }
-  const holidayExtra = Math.max(0, dailyNet - STANDARD_DAILY_REFERENCE_HOURS);
-  const base = 6 * dailyNet + holidayExtra;
-  return Math.max(0, base - L * dailyNet);
-}
+type DayBlock = { start: Date; end: Date; days: number };
 
-function countDeclaredOverlapDaysInt(
-  clipStart: Date,
-  clipEnd: Date,
-  exclusions: ExcludedDay[],
-  allowedTypes: readonly string[]
-): number {
-  let total = 0;
-  for (const excl of exclusions) {
-    if (!allowedTypes.includes(excl.type ?? "")) continue;
-    const es = new Date(excl.start);
-    const ee = new Date(excl.end);
-    if (Number.isNaN(+es) || Number.isNaN(+ee) || es > ee) continue;
-    const overlapStart = dateMax(es, clipStart);
-    const overlapEnd = dateMin(ee, clipEnd);
-    if (overlapStart > overlapEnd) continue;
-    total += Math.max(0, Math.floor(Number(excl.days) || 0));
+function countWeeksBySevenDaySteps(start: Date, end: Date): number {
+  if (end < start) return 0;
+  let cursor = startOfDay(start);
+  const until = startOfDay(end);
+  let weeks = 0;
+  while (cursor <= until) {
+    weeks += 1;
+    cursor = addDays(cursor, 7);
   }
-  return total;
+  return weeks;
 }
 
 function buildRowBits(
@@ -110,7 +82,11 @@ function buildRowBits(
   brut: number,
   kats: number,
   fmHours: number,
-  yillikIzinAciklama?: string
+  yillikIzinAciklama?: string,
+  dailyNet?: number,
+  workedDays?: number,
+  totalDays?: number,
+  excludedDays?: number
 ): FazlaMesaiRowBase {
   const fm = Number(
     (((brut * kats * weeks * fmHours) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2)
@@ -126,6 +102,10 @@ function buildRowBits(
     brut,
     katsayi: kats,
     fmHours,
+    ...(dailyNet != null ? { dailyNet } : {}),
+    ...(workedDays != null ? { workedDays } : {}),
+    ...(totalDays != null ? { totalDays } : {}),
+    ...(excludedDays != null ? { excludedDays } : {}),
     fm,
     net,
     wage: brut,
@@ -140,13 +120,13 @@ function expandOnePeriodRow(
   rowIdx: number,
   hg: number,
   weeklyOffDay: number | null,
-  davaciSevenDay: "tatilli" | "tatilsiz"
+  _davaciSevenDay: "tatilli" | "tatilsiz"
 ): FazlaMesaiRowBase[] {
-  const dailyNet = row.dailyNet;
+  let dailyNet = row.dailyNet;
   const startISO = row.startISO;
   const endISO = row.endISO;
   const W0 = row.weeks ?? 0;
-  if (dailyNet == null || !startISO || !endISO || W0 <= 0) return [row];
+  if (!startISO || !endISO || W0 <= 0) return [row];
 
   /** Dönemsel vb.: satırın kendi desenine göre takvimden çıkarılacak hafta günü; yoksa formdaki `weeklyOffDay` (Tanıklı Standart). */
   const rowWithWeekly = row as FazlaMesaiRowBase & {
@@ -175,123 +155,141 @@ function expandOnePeriodRow(
     rowHgRaw != null && Number.isFinite(rowHgRaw)
       ? Math.max(1, Math.min(7, Math.floor(Number(rowHgRaw))))
       : hgFromCaller;
-  const sevenDayForRow =
-    (row as { annualLeaveSevenDay?: "tatilli" | "tatilsiz" }).annualLeaveSevenDay ?? davaciSevenDay;
+  if (dailyNet == null || !Number.isFinite(dailyNet) || dailyNet <= 0) {
+    // Güvenli fallback: günlük net verilmemişse haftalık FM bilgisinden türet.
+    const weeklyFm = Math.max(0, Number(row.fmHours) || 0);
+    dailyNet = (weeklyFm + WEEKLY_WORK_LIMIT) / hgSafe;
+  }
+  if (!Number.isFinite(dailyNet) || dailyNet <= 0) return [row];
 
-  type LeaveHit = { weekStart: Date; weekEnd: Date; clipStart: Date; clipEnd: Date; leaveDaysInt: number };
-  const leaveHits: LeaveHit[] = [];
-
-  let weekMon = startOfWeek(segStart, { weekStartsOn: 1 });
-  const lastMon = startOfWeek(segEnd, { weekStartsOn: 1 });
-
-  while (weekMon <= lastMon) {
-    const weekSun = addDays(weekMon, 6);
-    const clipStart = dateMax(segStart, weekMon);
-    const clipEnd = dateMin(segEnd, weekSun);
-    if (clipStart <= clipEnd) {
-      let leaveDaysInt = Math.min(
-        hgSafe,
-        countAnnualLeaveCalendarDaysInWindow(
-          clipStart,
-          clipEnd,
-          exclusions,
-          effectiveWeeklyOff,
-          FM_EXCLUSION_TYPES
-        )
-      );
-      // Takvim sayımı 0 ise (tarih/hafta tatili filtresi vb.): kullanıcının dışlama kayıtlarındaki "Gün" toplamıyla düşüm.
-      // Yalnızca Yıllık İzin değil — UBGT / Rapor / Diğer de (Dönemsel + Tanıklı Standart uyumu).
-      if (leaveDaysInt <= 0) {
-        const declaredDays = countDeclaredOverlapDaysInt(clipStart, clipEnd, exclusions, FM_EXCLUSION_TYPES);
-        if (declaredDays > 0) leaveDaysInt = Math.min(hgSafe, declaredDays);
-      }
-      if (leaveDaysInt >= 1) {
-        leaveHits.push({
-          weekStart: new Date(weekMon),
-          weekEnd: new Date(weekSun),
-          clipStart,
-          clipEnd,
-          leaveDaysInt,
+  const scopedExclusions: ExcludedDay[] = [];
+  for (const ex of exclusions) {
+    if (!FM_EXCLUSION_TYPES.includes(ex.type ?? "")) continue;
+    const exStartRaw = startOfDay(new Date(ex.start));
+    const exEndRaw = startOfDay(new Date(ex.end));
+    if (Number.isNaN(+exStartRaw) || Number.isNaN(+exEndRaw) || exStartRaw > exEndRaw) continue;
+    const clippedStart = dateMax(segStart, exStartRaw);
+    const clippedEnd = dateMin(segEnd, exEndRaw);
+    if (clippedStart > clippedEnd) continue;
+    /** Paneldeki "Gün" alanı: >0 ise sadece bu kadar çalışma günü dışlanır; 0 ise eski davranış (tüm aralık). */
+    const explicitDayCap =
+      Number(ex.days) > 0 && Number.isFinite(Number(ex.days)) ? Math.floor(Number(ex.days)) : null;
+    let usedFromCap = 0;
+    let cur = new Date(clippedStart);
+    while (cur <= clippedEnd) {
+      if (explicitDayCap != null && usedFromCap >= explicitDayCap) break;
+      if (effectiveWeeklyOff == null || cur.getDay() !== effectiveWeeklyOff) {
+        const day = toISODate(cur);
+        scopedExclusions.push({
+          id: `${ex.id || "ex"}-${day}`,
+          type: ex.type || "Diğer",
+          start: day,
+          end: day,
+          days: 1,
         });
+        if (explicitDayCap != null) usedFromCap += 1;
       }
+      cur = addDays(cur, 1);
     }
-    weekMon = addDays(weekMon, 7);
   }
 
-  leaveHits.sort((a, b) => a.weekStart.getTime() - b.weekStart.getTime());
+  const blocks = splitByExclusionsBlocks(segStart, segEnd, scopedExclusions);
+  const excludedBlocks: DayBlock[] = blocks
+    .filter((b) => b.type === "excluded")
+    .map((b) => ({
+      start: startOfDay(b.start),
+      end: startOfDay(b.end),
+      days: Math.max(1, Math.floor((b.end.getTime() - b.start.getTime()) / 86400000) + 1),
+    }));
+  if (excludedBlocks.length === 0) return [row];
 
-  if (leaveHits.length === 0) return [row];
-
-  let H = 0;
+  const firstExcludedStart = excludedBlocks[0].start;
+  const nonExcludedSpans: DayBlock[] = blocks
+    .filter((b) => b.type === "normal")
+    .map((b) => ({
+      start: startOfDay(b.start),
+      end: startOfDay(b.end),
+      days: Math.max(1, Math.floor((b.end.getTime() - b.start.getTime()) / 86400000) + 1),
+    }))
+    .filter((span) => span.end < firstExcludedStart);
   const leavePositiveRows: FazlaMesaiRowBase[] = [];
+  const baseRows: FazlaMesaiRowBase[] = [];
 
-  leaveHits.forEach((hit, j) => {
-    const rawTotal = weeklyRawHoursForDavaciLeaveWeek(
-      dailyNet,
-      hgSafe,
-      sevenDayForRow,
-      hit.leaveDaysInt
+  excludedBlocks.forEach((blk, j) => {
+    const excludedCount = Math.min(
+      blk.days,
+      countAnnualLeaveCalendarDaysInWindow(
+        blk.start,
+        blk.end,
+        exclusions,
+        effectiveWeeklyOff,
+        FM_EXCLUSION_TYPES
+      )
     );
-    const totalRounded = bilirkisiRoundWeeklyTotalHours(rawTotal);
-    const fmWeek = Math.max(0, totalRounded - WEEKLY_WORK_LIMIT);
-    if (fmWeek <= EPS) {
-      H += 1;
-      return;
-    }
-    const monIso = toISODate(hit.weekStart);
-    const brutW = getAsgariUcretByDate(monIso) || 0;
+    // Exclusion satırında çalışma gününü haftalık sabitten değil, satırın kendi blok gününden türet.
+    // Aksi halde 1-2 günlük kırpılmış bloklarda FM saat yapay olarak şişer.
+    const workedDays = Math.max(0, blk.days - excludedCount);
+    const rawTotal = dailyNet * workedDays;
+    const fmBlockHours = Math.max(0, rawTotal - WEEKLY_WORK_LIMIT);
+    const brutW = getAsgariUcretByDate(toISODate(blk.start)) || 0;
     leavePositiveRows.push(
       buildRowBits(
-        `auto-yl2-${rowIdx}-${j}-${toISODate(hit.clipStart)}`,
-        toISODate(hit.clipStart),
-        toISODate(hit.clipEnd),
-        1,
+        `auto-yl2-${rowIdx}-${j}-${toISODate(blk.start)}`,
+        toISODate(blk.start),
+        toISODate(blk.end),
+        1, // exclusion bloğu her zaman 1 hafta
         brutW,
         kats,
-        fmWeek,
+        fmBlockHours,
         formatFmDeductionCaption(
           hgSafe,
-          hit.leaveDaysInt,
+          excludedCount,
           exclusions,
-          hit.clipStart,
-          hit.clipEnd,
+          blk.start,
+          blk.end,
           effectiveWeeklyOff
-        )
+        ),
+        dailyNet,
+        workedDays,
+        blk.days,
+        excludedCount
       )
     );
   });
 
-  const lp = leavePositiveRows.length;
-  const normalWeeks = Math.max(0, W0 - H - lp);
-  const out: FazlaMesaiRowBase[] = [];
-
-  if (normalWeeks > 0) {
+  const excludedWeekCount = excludedBlocks.length;
+  const baseWeeks = Math.max(0, W0 - excludedWeekCount);
+  if (baseWeeks > 0 && nonExcludedSpans.length > 0) {
+    const span = nonExcludedSpans[0];
+    const brutSpan = getAsgariUcretByDate(toISODate(span.start)) || brutPeriod;
     const fmN = Number(
-      (((brutPeriod * kats * normalWeeks * baselineFm) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2)
+      (((brutSpan * kats * baseWeeks * baselineFm) / FAZLA_MESAI_DENOMINATOR) * FAZLA_MESAI_KATSAYI).toFixed(2)
     );
-    const netN = Number(
-      (fmN * (1 - DAMGA_VERGISI_ORANI - GELIR_VERGISI_ORANI)).toFixed(2)
-    );
+    const netN = Number((fmN * (1 - DAMGA_VERGISI_ORANI - GELIR_VERGISI_ORANI)).toFixed(2));
     const { dailyNet: _omitDaily, ...rowBase } = row as FazlaMesaiRowBase & { dailyNet?: number };
-    out.push({
+    baseRows.push({
       ...rowBase,
-      id: `auto-yl2-base-${rowIdx}-${startISO}-${endISO}`,
-      startISO,
-      endISO,
-      rangeLabel: `${startISO} – ${endISO}`,
-      weeks: normalWeeks,
-      originalWeekCount: normalWeeks,
-      brut: brutPeriod,
+      id: `auto-yl2-base-${rowIdx}-${toISODate(span.start)}`,
+      startISO: toISODate(span.start),
+      endISO: toISODate(span.end),
+      rangeLabel: `${toISODate(span.start)} – ${toISODate(span.end)}`,
+      weeks: baseWeeks,
+      originalWeekCount: baseWeeks,
+      brut: brutSpan,
       katsayi: kats,
       fmHours: baselineFm,
+      dailyNet,
+      workedDays: span.days,
+      totalDays: span.days,
+      excludedDays: 0,
       fm: fmN,
       net: netN,
-      wage: brutPeriod,
+      wage: brutSpan,
       overtimeAmount: fmN,
     } as FazlaMesaiRowBase);
   }
 
-  out.push(...leavePositiveRows);
+  const out: FazlaMesaiRowBase[] = [...baseRows, ...leavePositiveRows];
 
   if (out.length === 0) return [];
 

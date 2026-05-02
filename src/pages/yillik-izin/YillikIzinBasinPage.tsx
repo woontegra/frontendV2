@@ -5,14 +5,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Youtube, Copy, Trash2 } from "lucide-react";
+import { Copy, Trash2 } from "lucide-react";
 import FooterActions from "@/components/FooterActions";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 import { usePageStyle } from "@/hooks/usePageStyle";
-import { getVideoLink } from "@/config/videoLinks";
 import { calcWorkPeriodBilirKisi } from "@/utils/dateUtils";
 import { apiClient } from "@/utils/apiClient";
 import { saveExclusionSet, getAllExclusionSets, deleteExclusionSet } from "@/shared/utils/exclusionStorage";
@@ -26,15 +25,27 @@ import { copySectionForWord } from "@/utils/copyTableForWord";
 import { downloadPdfFromDOM } from "@/utils/pdfExport";
 import { calculateGunlukGazeteIzin } from "./basinGunlukGazeteCalculations";
 
-const NOTE_ITEMS: string[] = [
-  "Günlük gazeteler için: Yıllık ücretli izin hakkı 20 iş günüdür.",
-  "Süreli yayın yapan gazeteler için: Yıllık ücretli izin hakkı 15 iş günüdür.",
-  "İzin süreleri çalışma süresine göre değişmez, sabit 15 veya 20 gündür.",
-  "Basın İş Kanunu kapsamında çalışanlar için özel düzenlemeler geçerlidir.",
+const BASIN_KANUNU_NOTLARI: Array<{ icon: string; text: string }> = [
+  {
+    icon: "📰",
+    text: 'Basın Mesleğinde Çalışanlarla Çalıştıranlar Arasındaki Münasebetlerin Tanzimi Hakkında Kanun (Basın İş Kanunu) nun "Yıllık ücretli izin" başlıklı 21. Maddesi "(Değişik: 4/1/1961 - 212/1 md.)',
+  },
+  {
+    icon: "⏱️",
+    text: "Günlük bir mevkutede çalışan bir gazeteciye, en az bir yıl çalışmış olmak şartiyle, yılda dört hafta tam ücretli izin verilir. Gazetecilik mesleğindeki hizmeti on yıldan yukarı olan bir gazeteciye, altı hafta ücretli izin verilir. Gazetecinin kıdemi aynı gazetedeki hizmetine göre değil, meslekteki hizmet süresine göre hesaplanır.",
+  },
+  {
+    icon: "📅",
+    text: 'Günlük olmayan mevkutelerde çalışan gazetecilere her altı aylık çalışma devresi için iki hafta ücretli izin verilir. Yıllık ücretli izinlerin hesabında bu Kanunun 1 inci maddesindeki "Gazeteci" tabirine girenlerin kıdemleri, iş akdinin devam etmiş veya fasılalarla yeniden inikat etmiş olmasına bakılmaksızın, gazetecilik mesleğinde geçirdikleri hizmet süresi nazara alınmak suretiyle tesbit edilir.',
+  },
+  {
+    icon: "✅",
+    text: 'İzin hakkından feragat edilemez." Şeklinde düzenlenmiştir.',
+  },
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Basın Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Basın Yıllık Ücretli İzin";
 const REPORT_TITLE = "Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_basin";
 const REDIRECT_PATH = "/yillik-izin/basin";
@@ -112,8 +123,8 @@ export default function YillikIzinBasinPage() {
   const pageStyle = usePageStyle("yillik-izin");
   const { success, error: showToastError } = useToast();
   const { kaydetAc, isSaving } = useKaydetContext();
-  const videoLink = getVideoLink("yillik-basin");
   const loadedIdRef = useRef<string | null>(null);
+  const calcRequestSeqRef = useRef(0);
 
   const [meslegeBaslangic, setMeslegeBaslangic] = useState("");
   const [iseGiris, setIseGiris] = useState("");
@@ -127,6 +138,7 @@ export default function YillikIzinBasinPage() {
   const [showExclusionLoadModal, setShowExclusionLoadModal] = useState(false);
   const [exclusionSaveName, setExclusionSaveName] = useState("");
   const [savedExclusionSets, setSavedExclusionSets] = useState<SavedExclusionSet[]>([]);
+  const [meslegeBaslangicInputInvalid, setMeslegeBaslangicInputInvalid] = useState(false);
 
   const [usedTotal, setUsedTotal] = useState(0);
   const [remainingDays, setRemainingDays] = useState(0);
@@ -142,32 +154,49 @@ export default function YillikIzinBasinPage() {
   const setRow = (rowId: string, patch: Partial<UsedRow>) =>
     setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, ...patch } : r)));
 
-  const isyeriCalismaLabel = useMemo(
-    () => calcWorkPeriodBilirKisi(iseGiris, istenCikis).label,
-    [iseGiris, istenCikis]
-  );
+  const isyeriCalismaLabel = calcWorkPeriodBilirKisi(iseGiris, istenCikis).label;
+  const meslekKidemiLabel = calcWorkPeriodBilirKisi(meslegeBaslangic, istenCikis).label || "-";
 
-  const meslekKidemiLabel = useMemo(
-    () => calcWorkPeriodBilirKisi(meslegeBaslangic, istenCikis).label,
-    [meslegeBaslangic, istenCikis]
-  );
+  const parseISODateStrict = (value: string): Date | null => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return dt;
+  };
 
-  const izinHesaplama = useMemo(
-    () => calculateGunlukGazeteIzin(meslegeBaslangic, iseGiris, istenCikis),
-    [meslegeBaslangic, iseGiris, istenCikis]
-  );
+  const meslekKidemiUyarisi = (() => {
+    if (meslegeBaslangicInputInvalid) {
+      return "Mesleğe başlangıç tarihi geçersiz. Lütfen geçerli bir tarih girin.";
+    }
+    if (!meslegeBaslangic || !istenCikis) return "";
+    const meslekStart = parseISODateStrict(meslegeBaslangic);
+    if (!meslekStart) return "Mesleğe başlangıç tarihi geçersiz. Lütfen geçerli bir tarih girin.";
+    const cikis = parseISODateStrict(istenCikis);
+    if (!cikis) return "";
+    if (meslekStart.getTime() > cikis.getTime()) {
+      return "Mesleğe başlangıç tarihi, işten çıkış tarihinden sonra olamaz.";
+    }
+    return "";
+  })();
+
+  const izinHesaplama = calculateGunlukGazeteIzin(meslegeBaslangic, iseGiris, istenCikis);
 
   const totalEntitlement = izinHesaplama.izinGun || 0;
 
-  const selectedYear = useMemo(() => {
+  const selectedYear = (() => {
     if (istenCikis) {
       const year = new Date(istenCikis).getFullYear();
       if (!isNaN(year) && year >= 2010 && year <= 2030) return year;
     }
     return new Date().getFullYear();
-  }, [istenCikis]);
+  })();
 
-  const asgariUcretHatasi = useMemo(() => {
+  const asgariUcretHatasi = (() => {
     if (!istenCikis || !brutUcret) return null;
     const girilenUcret = parseFloat(String(brutUcret).replace(/\./g, "").replace(",", "."));
     if (isNaN(girilenUcret) || girilenUcret <= 0) return null;
@@ -181,13 +210,26 @@ export default function YillikIzinBasinPage() {
       };
     }
     return null;
-  }, [istenCikis, brutUcret]);
+  })();
 
   useEffect(() => {
     document.title = DOCUMENT_TITLE;
   }, []);
 
   useEffect(() => {
+    // Deterministic/stateless flow: always clear computed outputs first,
+    // then compute from current input snapshot only.
+    setUsedTotal(0);
+    setRemainingDays(0);
+    setBrutIzin(0);
+    setSgk(0);
+    setIssizlik(0);
+    setGelirVergisi(0);
+    setGelirVergisiDilimleri("");
+    setDamgaVergisi(0);
+    setNetIzin(0);
+
+    const requestSeq = ++calcRequestSeqRef.current;
     const calculateFromBackend = async () => {
       try {
         const response = await apiClient("/api/yillik-izin/basin", {
@@ -195,13 +237,14 @@ export default function YillikIzinBasinPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             years: 0,
-            brutUcret,
+            brutUcret: toDays(brutUcret),
             usedRows: rows,
             exitYear: selectedYear,
             totalEntitlement,
           }),
         });
         const result = await response.json().catch(() => ({}));
+        if (requestSeq !== calcRequestSeqRef.current) return; // stale response guard
         if (!response.ok) {
           const errMsg = result?.error || result?.message || `HTTP ${response.status}`;
           showToastError(errMsg);
@@ -219,24 +262,22 @@ export default function YillikIzinBasinPage() {
           setNetIzin(result.data.netIzin || 0);
         }
       } catch (error) {
+        if (requestSeq !== calcRequestSeqRef.current) return; // stale response guard
         showToastError(error instanceof Error ? error.message : "Hesaplama isteği başarısız.");
       }
     };
 
     if (totalEntitlement > 0 && brutUcret && toDays(brutUcret) > 0) {
       calculateFromBackend();
-    } else {
-      setUsedTotal(0);
-      setRemainingDays(0);
-      setBrutIzin(0);
-      setSgk(0);
-      setIssizlik(0);
-      setGelirVergisi(0);
-      setGelirVergisiDilimleri("");
-      setDamgaVergisi(0);
-      setNetIzin(0);
     }
-  }, [totalEntitlement, brutUcret, rows, selectedYear, showToastError]);
+  }, [
+    meslegeBaslangic,
+    iseGiris,
+    istenCikis,
+    brutUcret,
+    rows,
+    showToastError,
+  ]);
 
   useEffect(() => {
     if (!effectiveId || loadedIdRef.current === effectiveId) return;
@@ -817,28 +858,7 @@ export default function YillikIzinBasinPage() {
         <ReportContentFromConfig config={basinReportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Basın İşçileri Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Günlük gazete — meslek kıdemine göre haftalık izin</p>
-          </div>
-          {videoLink && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => window.open(videoLink, "_blank")}
-              className="gap-2 font-semibold rounded-full border-red-300 dark:border-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 shrink-0"
-            >
-              <Youtube className="h-4 w-4" />
-              Kullanım Videosu
-            </Button>
-          )}
-        </div>
-
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
         <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm overflow-hidden">
           <div className="h-1 w-full" style={{ background: `linear-gradient(90deg, ${accent}, ${accent}99)` }} />
           <div className="p-4 sm:p-6 space-y-5">
@@ -867,7 +887,31 @@ export default function YillikIzinBasinPage() {
                   type="date"
                   max="9999-12-31"
                   value={meslegeBaslangic}
-                  onChange={(e) => setMeslegeBaslangic(clampYearInput(e.target.value))}
+                  onChange={(e) => {
+                    setMeslegeBaslangic(clampYearInput(e.target.value));
+                    if (meslegeBaslangicInputInvalid) setMeslegeBaslangicInputInvalid(false);
+                  }}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.validity.valid) {
+                      setMeslegeBaslangicInputInvalid(true);
+                      showToastError("Mesleğe başlangıç tarihi geçersiz. Lütfen geçerli bir tarih girin.");
+                      return;
+                    }
+                    setMeslegeBaslangicInputInvalid(false);
+                    const v = e.target.value;
+                    if (!v) return;
+                    if (!parseISODateStrict(v)) {
+                      showToastError("Mesleğe başlangıç tarihi geçersiz. Lütfen geçerli bir tarih girin.");
+                      return;
+                    }
+                    if (istenCikis) {
+                      const s = parseISODateStrict(v);
+                      const c = parseISODateStrict(istenCikis);
+                      if (s && c && s.getTime() > c.getTime()) {
+                        showToastError("Mesleğe başlangıç tarihi, işten çıkış tarihinden sonra olamaz.");
+                      }
+                    }
+                  }}
                   className={`${inputCls} mt-1`}
                 />
               </div>
@@ -934,6 +978,7 @@ export default function YillikIzinBasinPage() {
               <div>
                 <label className={labelCls}>Meslekteki kıdem süresi</label>
                 <input readOnly value={meslekKidemiLabel} className={`${inputCls} mt-1 bg-gray-100 dark:bg-gray-900/50`} />
+                {meslekKidemiUyarisi && <p className="text-red-600 text-xs mt-1">{meslekKidemiUyarisi}</p>}
               </div>
               <div>
                 <label className={labelCls}>Çıplak brüt ücret</label>
@@ -1141,13 +1186,24 @@ export default function YillikIzinBasinPage() {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
-              <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">Notlar</h3>
-              <ul className="list-disc pl-5 space-y-1 text-[11px] font-light text-gray-500 dark:text-gray-400">
-                {NOTE_ITEMS.map((note, i) => (
-                  <li key={i}>{note}</li>
-                ))}
-              </ul>
+            <div className="rounded-xl border border-blue-100 dark:border-blue-900/50 bg-blue-50/50 dark:bg-blue-950/20 overflow-hidden">
+              <div className="px-4 py-3 border-b border-blue-100 dark:border-blue-900/50 bg-blue-100/50 dark:bg-blue-900/20">
+                <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                  <span className="text-blue-600 dark:text-blue-400">ⓘ</span>
+                  Notlar
+                </h3>
+              </div>
+              <div className="p-4">
+                <div className="font-semibold text-[13px] text-gray-900 dark:text-gray-100 mb-2.5">Not: Basın İş Kanunu – Yıllık İzin 21. Madde</div>
+                <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300 leading-relaxed">
+                  {BASIN_KANUNU_NOTLARI.map((item, i) => (
+                    <div key={i} className="flex items-start gap-2.5">
+                      <span className="shrink-0">{item.icon}</span>
+                      <p>{item.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>

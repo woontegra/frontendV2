@@ -625,6 +625,7 @@ export function seasonSegmentRow(
       const fmHours = haftalikMode
         ? calcFmHoursPerWeekHaftalik(pattern)
         : calcFmHoursPerWeek(pattern, wd, tab);
+      const dailyNet = calcDailyNetHours(pattern.startTime, pattern.endTime);
       const brut = getAsgariUcretByDate(siso) || 0;
       const fm = (weeks * brut * katSayi * fmHours / 225) * 1.5;
       const net = fm * (1 - DAMGA_VERGISI - GELIR_VERGISI);
@@ -659,6 +660,7 @@ export function seasonSegmentRow(
         brut,
         katsayi: katSayi,
         fmHours,
+        dailyNet,
         fm: Number(fm.toFixed(2)),
         net: Number(net.toFixed(2)),
         ...leaveMeta,
@@ -762,6 +764,7 @@ export function buildDonemselRows(params: {
       const fmHours = haftalikMode
         ? calcFmHoursPerWeekHaftalik(pattern)
         : calcFmHoursPerWeek(pattern, patWd, patTab);
+      const dailyNet = calcDailyNetHours(pattern.startTime, pattern.endTime);
 
       const baseRow: DonemselRow & { witnessData?: DonemselWitness } = {
         id: `period-${rawRows.length}`,
@@ -773,6 +776,7 @@ export function buildDonemselRows(params: {
         brut,
         katsayi: kats,
         fmHours,
+        dailyNet,
         fm: 0,
         net: 0,
         witnessData: interval.witnessData,

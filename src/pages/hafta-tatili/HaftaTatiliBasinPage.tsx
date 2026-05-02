@@ -6,7 +6,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Plus, Trash2, Youtube, Copy } from "lucide-react";
+import { Youtube, Copy } from "lucide-react";
 import FooterActions from "@/components/FooterActions";
 import { getVideoLink } from "@/config/videoLinks";
 import { useToast } from "@/context/ToastContext";
@@ -40,6 +40,21 @@ const inputCls =
 const labelCls = "block text-xs font-medium text-gray-600 dark:text-gray-400 mb-0.5";
 const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200";
 
+function parseTRDateToISO(value: string): string {
+  const v = (value || "").trim();
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(v);
+  if (!m) return "";
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+function extractPeriodISO(period: string): { startISO: string; endISO: string } {
+  const [startPart, endPart] = String(period || "").split("-").map((s) => s.trim());
+  return {
+    startISO: parseTRDateToISO(startPart || ""),
+    endISO: parseTRDateToISO(endPart || ""),
+  };
+}
+
 function recalcRow(row: HaftaTatiliTableRow, geceCalisan: boolean): HaftaTatiliTableRow {
   const dailyWage = ((row.wage ?? 0) * (row.coefficient ?? 1)) / 30;
   const daily50 = Number((dailyWage * 1.5).toFixed(2));
@@ -71,6 +86,7 @@ export default function HaftaTatiliBasinPage() {
 
   // ─── BASIN İŞ'E ÖZGÜ: Gece çalışanı ──────────────────────────────────────
   const [isGeceCalisan, setIsGeceCalisan] = useState(false);
+  const [hoveredRow, setHoveredRow] = useState<number | null>(null);
 
   // ─── TARİH ARALIK HANDLER ─────────────────────────────────────────────────
 
@@ -172,6 +188,46 @@ export default function HaftaTatiliBasinPage() {
     );
   }, [isGeceCalisan]);
 
+  const handleRowDateChange = useCallback(
+    (i: number, field: "startISO" | "endISO", value: string) => {
+      const gunSayisi = isGeceCalisan ? 2 : 1;
+      setHaftaTatiliRows((prev) =>
+        prev.map((r, idx) => {
+          if (idx !== i) return r;
+          const inferred = extractPeriodISO(r.period);
+          const startISO = field === "startISO" ? value : r.startISO || inferred.startISO;
+          const endISO = field === "endISO" ? value : r.endISO || inferred.endISO;
+          const startFormatted = startISO ? new Date(startISO).toLocaleDateString("tr-TR") : "";
+          const endFormatted = endISO ? new Date(endISO).toLocaleDateString("tr-TR") : "";
+          const period = startFormatted && endFormatted ? `${startFormatted} - ${endFormatted}` : r.period;
+
+          if (!startISO || !endISO) {
+            return { ...r, startISO, endISO, period, manual: true };
+          }
+
+          const weekCount = r.manualWeekCount
+            ? r.weekCount
+            : calculateWeekCount(startISO, endISO, haftaTatiliExcludedDays);
+          const haftaTatiliDays = getHaftaTatiliDaysForPeriod(startISO, endISO, selectedHolidayIds, haftaTatiliExcludedDays);
+          const daily50 = Number((r.dailyWage * 1.5).toFixed(2));
+          const haftaTatiliTotal = daily50 * weekCount * gunSayisi;
+
+          return {
+            ...r,
+            manual: true,
+            startISO,
+            endISO,
+            period,
+            weekCount,
+            haftaTatiliDays,
+            haftaTatiliTotal,
+          };
+        })
+      );
+    },
+    [haftaTatiliExcludedDays, selectedHolidayIds, isGeceCalisan]
+  );
+
   const applyKatsayi = useCallback((k: number) => {
     const fixed = Number(k.toFixed(4));
     setHaftaTatiliRows((prev) => prev.map((r) => recalcRow({ ...r, coefficient: fixed }, isGeceCalisan)));
@@ -183,11 +239,22 @@ export default function HaftaTatiliBasinPage() {
     setHasCustomKatsayi(false);
   };
 
-  const addManualRow = () => {
-    setHaftaTatiliRows((prev) => [
-      ...prev,
-      { period: "", weekCount: 0, wage: 0, coefficient: 1, dailyWage: 0, haftaTatiliDays: 0, haftaTatiliTotal: 0, startISO: "", endISO: "", manual: true },
-    ]);
+  const insertEmptyRowAfter = (i: number) => {
+    setHaftaTatiliRows((prev) => {
+      const newRow = {
+        period: "",
+        weekCount: 0,
+        wage: 0,
+        coefficient: 1,
+        dailyWage: 0,
+        haftaTatiliDays: 0,
+        haftaTatiliTotal: 0,
+        startISO: "",
+        endISO: "",
+        manual: true,
+      } satisfies HaftaTatiliTableRow;
+      return [...prev.slice(0, i + 1), newRow, ...prev.slice(i + 1)];
+    });
   };
 
   const deleteRow = (i: number) => {
@@ -415,6 +482,33 @@ export default function HaftaTatiliBasinPage() {
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-lg overflow-hidden ring-1 ring-gray-100 dark:ring-gray-700/50">
             <div className="p-3 sm:p-4 space-y-5">
 
+              {/* ── Sürekli gece çalışanı (5953 — tarih aralığının üstünde) ── */}
+              <section aria-labelledby="gece-calisan-heading">
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm overflow-hidden ring-1 ring-gray-100/80 dark:ring-gray-700/50">
+                  <div className="h-1 bg-gradient-to-r from-amber-900 via-amber-800 to-amber-900 dark:from-amber-700 dark:via-amber-600 dark:to-amber-700" aria-hidden />
+                  <div className="px-3 py-3 sm:px-4 sm:py-3.5 flex items-start gap-3">
+                    <input
+                      id="gece-calisan"
+                      type="checkbox"
+                      checked={isGeceCalisan}
+                      onChange={(e) => setIsGeceCalisan(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <label htmlFor="gece-calisan" className="min-w-0 cursor-pointer select-none leading-snug">
+                      <span id="gece-calisan-heading" className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                        Sürekli Gece Çalışanı
+                      </span>
+                      <span className="mt-0.5 block text-xs font-normal text-gray-500 dark:text-gray-400">
+                        (Haftada 2 gün tatil hakkı)
+                      </span>
+                      <span className="mt-1 block text-[11px] font-normal text-gray-500 dark:text-gray-400 leading-relaxed">
+                        5953 Sayılı Basın İş Kanunu kapsamında görevi sürekli gece çalışmasını gerektiriyorsa işaretleyin; hafta tatili ücreti iki günlük esasa göre hesaplanır.
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+
               {/* ── 1. TARİH ARALIK ── */}
               <section>
                 <div className="flex items-center justify-between mb-2">
@@ -424,7 +518,7 @@ export default function HaftaTatiliBasinPage() {
                     onClick={handleAddRange}
                     className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-dashed border-indigo-400 dark:border-indigo-600 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
                   >
-                    <Plus className="w-3 h-3" /> Dönem Ekle
+                    + Dönem Ekle
                   </button>
                 </div>
                 <div className="space-y-2">
@@ -463,27 +557,14 @@ export default function HaftaTatiliBasinPage() {
                         type="button"
                         onClick={() => handleRemoveRange(range.id)}
                         disabled={dateRanges.length <= 1}
-                        className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded disabled:opacity-30"
+                        className="h-7 w-7 rounded border border-red-300 dark:border-red-600 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-30"
                         aria-label="Sil"
+                        title="Dönemi sil"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        -
                       </button>
                     </div>
                   ))}
-                </div>
-
-                {/* Gece çalışanı checkbox */}
-                <div className="mt-3 flex items-center gap-2">
-                  <input
-                    id="gece-calisan"
-                    type="checkbox"
-                    checked={isGeceCalisan}
-                    onChange={(e) => setIsGeceCalisan(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                  />
-                  <label htmlFor="gece-calisan" className="text-xs text-gray-700 dark:text-gray-300 cursor-pointer select-none">
-                    Sürekli gece çalışanı (haftada <span className="font-semibold">2 gün</span> tatil hakkı — 5953 Sayılı Kanun)
-                  </label>
                 </div>
               </section>
 
@@ -523,18 +604,17 @@ export default function HaftaTatiliBasinPage() {
                   </div>
                 </div>
 
-                {isGeceCalisan && (
-                  <div className="mb-2 px-2.5 py-1.5 rounded bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700 text-xs text-indigo-700 dark:text-indigo-300">
-                    Sürekli gece çalışanı seçili — her hafta için <strong>2 günlük</strong> tatil ücreti hesaplanıyor.
-                  </div>
-                )}
-
                 <div className="overflow-x-auto rounded border border-gray-200 dark:border-gray-700">
-                  <table className="w-full text-xs min-w-[700px]">
+                  <table className="w-full text-xs min-w-[700px] border-collapse">
                     <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700">
-                        {["Tarih (Ücret Dönemi)", "Hafta", "Ücret (BRÜT) ₺", "Katsayı", "Günlük Brüt ₺", isGeceCalisan ? "Günlük %50 Zamlı ×2 ₺" : "Günlük %50 Zamlı ₺", "Hafta Tatili Ücreti ₺", ""].map((h) => (
-                          <th key={h} className="px-2 py-2 text-left font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                      <tr className="bg-gray-50 dark:bg-gray-900/40">
+                        {["Tarih (Ücret Dönemi)", "Hafta", "Ücret (BRÜT) ₺", "Katsayı", "Günlük Brüt ₺", isGeceCalisan ? "Günlük %50 Zamlı ×2 ₺" : "Günlük %50 Zamlı ₺", "Hafta Tatili Ücreti ₺", ""].map((h, colIdx) => (
+                          <th
+                            key={`${h}-${colIdx}`}
+                            className={`px-2 py-2 font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap border border-gray-200 dark:border-gray-700 ${
+                              colIdx === 0 ? "text-left" : colIdx === 7 ? "text-center" : "text-right"
+                            }`}
+                          >
                             {h}
                           </th>
                         ))}
@@ -543,48 +623,81 @@ export default function HaftaTatiliBasinPage() {
                     <tbody>
                       {haftaTatiliRows.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="px-2 py-4 text-center text-gray-400 dark:text-gray-500">
-                            Tarih aralığı girin veya + Satır Ekle butonuna tıklayın
+                          <td colSpan={8} className="px-2 py-4 text-center text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700">
+                            Tarih aralığı girin
                           </td>
                         </tr>
                       ) : (
                         haftaTatiliRows.map((row, i) => (
                           <tr
                             key={i}
-                            className={`border-b border-gray-100 dark:border-gray-700/50 ${i % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/50 dark:bg-gray-800/50"}`}
+                            className={i % 2 === 0 ? "bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900/50" : "bg-gray-50/50 dark:bg-gray-800/50 hover:bg-gray-100/70 dark:hover:bg-gray-900/50"}
+                            onMouseEnter={() => setHoveredRow(i)}
+                            onMouseLeave={() => setHoveredRow(null)}
                           >
-                            <td className="px-2 py-1.5 text-gray-700 dark:text-gray-300 whitespace-nowrap">{row.period || "-"}</td>
-                            <td className="px-2 py-1.5">
+                            <td className="px-2 py-1.5 text-left text-gray-700 dark:text-gray-300 whitespace-nowrap border border-gray-200 dark:border-gray-700">
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="date"
+                                  value={row.startISO || extractPeriodISO(row.period).startISO}
+                                  onChange={(e) => handleRowDateChange(i, "startISO", e.target.value)}
+                                  className="w-[7.1rem] px-1 py-0.5 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                  max="9999-12-31"
+                                />
+                                <span>-</span>
+                                <input
+                                  type="date"
+                                  value={row.endISO || extractPeriodISO(row.period).endISO}
+                                  onChange={(e) => handleRowDateChange(i, "endISO", e.target.value)}
+                                  className="w-[7.1rem] px-1 py-0.5 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                  max="9999-12-31"
+                                />
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-700">
                               <input
                                 type="number"
                                 value={row.weekCount}
                                 onChange={(e) => handleRowWeekChange(i, e.target.value)}
-                                className="w-14 px-1.5 py-0.5 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                className="w-14 max-w-full ml-auto block px-1.5 py-0.5 text-xs text-right rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                                 min="0"
                               />
                             </td>
-                            <td className="px-2 py-1.5">
+                            <td className="px-2 py-1.5 text-right border border-gray-200 dark:border-gray-700">
                               <input
                                 type="text"
                                 value={fmtTR(row.wage)}
                                 onChange={(e) => handleRowWageChange(i, e.target.value)}
-                                className="w-28 px-1.5 py-0.5 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                className="w-28 max-w-full ml-auto block px-1.5 py-0.5 text-xs text-right rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                               />
                             </td>
-                            <td className="px-2 py-1.5 text-gray-600 dark:text-gray-400">{row.coefficient.toFixed(4)}</td>
-                            <td className="px-2 py-1.5 text-gray-700 dark:text-gray-300">{fmtTR(row.dailyWage)}</td>
-                            <td className="px-2 py-1.5 text-gray-700 dark:text-gray-300">{fmtTR(Number((row.dailyWage * 1.5).toFixed(2)))}</td>
-                            <td className="px-2 py-1.5 font-medium text-indigo-700 dark:text-indigo-400">{fmtTR(row.haftaTatiliTotal)}</td>
-                            <td className="px-2 py-1.5">
-                              <button
-                                type="button"
-                                onClick={() => deleteRow(i)}
-                                disabled={haftaTatiliRows.length <= 1}
-                                className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded disabled:opacity-30"
-                                aria-label="Sil"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                            <td className="px-2 py-1.5 text-right text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700 tabular-nums">{row.coefficient.toFixed(4)}</td>
+                            <td className="px-2 py-1.5 text-right text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 tabular-nums">{fmtTR(row.dailyWage)}</td>
+                            <td className="px-2 py-1.5 text-right text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 tabular-nums">{fmtTR(Number((row.dailyWage * 1.5).toFixed(2)))}</td>
+                            <td className="px-2 py-1.5 text-right font-medium text-indigo-700 dark:text-indigo-400 border border-gray-200 dark:border-gray-700 tabular-nums">{fmtTR(row.haftaTatiliTotal)}</td>
+                            <td className="border-0 bg-transparent w-16 p-0 text-center align-middle">
+                              {hoveredRow === i && (
+                                <div className="flex gap-2 justify-center items-center">
+                                  <span
+                                    className="row-add-icon text-orange-500 hover:text-orange-600 cursor-pointer text-sm leading-none"
+                                    onClick={() => insertEmptyRowAfter(i)}
+                                    title="Altına yeni boş satır ekle"
+                                  >
+                                    +
+                                  </span>
+                                  <span
+                                    className="row-delete-icon text-red-500 hover:text-red-600 cursor-pointer text-sm leading-none"
+                                    onClick={() => {
+                                      if (haftaTatiliRows.length <= 1) return;
+                                      deleteRow(i);
+                                    }}
+                                    style={{ opacity: haftaTatiliRows.length <= 1 ? 0.3 : 1, cursor: haftaTatiliRows.length <= 1 ? "not-allowed" : "pointer" }}
+                                    title={haftaTatiliRows.length <= 1 ? "En az 1 satır kalmalı" : "Bu satırı sil"}
+                                  >
+                                    −
+                                  </span>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))
@@ -592,23 +705,15 @@ export default function HaftaTatiliBasinPage() {
                     </tbody>
                     {haftaTatiliRows.length > 0 && (
                       <tfoot>
-                        <tr className="border-t border-gray-300 dark:border-gray-600 bg-indigo-50 dark:bg-indigo-900/20">
-                          <td colSpan={6} className="px-2 py-2 font-semibold text-gray-700 dark:text-gray-300">Toplam</td>
-                          <td className="px-2 py-2 font-bold text-indigo-700 dark:text-indigo-400">{fmtTR(totalBrut)} ₺</td>
-                          <td />
+                        <tr className="bg-indigo-50 dark:bg-indigo-900/20">
+                          <td colSpan={6} className="px-2 py-2 text-right font-semibold text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600">Toplam</td>
+                          <td className="px-2 py-2 text-right font-bold text-indigo-700 dark:text-indigo-400 border border-gray-300 dark:border-gray-600 tabular-nums">{fmtTR(totalBrut)} ₺</td>
+                          <td className="border-0 bg-transparent w-16" />
                         </tr>
                       </tfoot>
                     )}
                   </table>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={addManualRow}
-                  className="mt-2 flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                >
-                  <Plus className="w-3 h-3" /> Satır Ekle
-                </button>
               </section>
 
               {/* ── 4. BRÜTTEN NETE ── */}
@@ -622,11 +727,36 @@ export default function HaftaTatiliBasinPage() {
               {/* ── NOTLAR ── */}
               <section>
                 <h2 className={sectionTitleCls}>Notlar</h2>
-                <div className="mt-1.5 rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5 text-[11px] font-light text-gray-500 dark:text-gray-400 space-y-0.5">
-                  <p>5953 Sayılı Basın İş Kanunu'na göre gazetecilere hafta tatili ücreti ödenir.</p>
-                  <p>Gazetecinin görevi sürekli gece çalışmasını gerektiriyorsa hafta tatili iki gündür.</p>
-                  <p>Hafta tatili ücreti çıplak günlük ücretin %50 fazlası olarak hesaplanır.</p>
-                  <p>Zamanaşımı süresi 5 yıldır.</p>
+                <div className="mt-1.5 rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5 sm:p-3 text-xs text-gray-600 dark:text-gray-400 leading-relaxed space-y-2 max-h-[min(50vh,28rem)] overflow-y-auto">
+                  <p className="text-[13px] font-semibold text-gray-800 dark:text-gray-200">Haftalık izin</p>
+                  <p className="font-semibold text-gray-800 dark:text-gray-200">Madde 19 – (Değişik: 4/1/1961 - 212/1 md.)</p>
+                  <p>
+                    Her altı günlük fiili çalışmayı mütaakıp gazeteciye bir günlük ücretli dinlenme izni verilmesi mecburidir. Gazetecinin vazifesi devamlı gece çalışmasını gerektirdiği hallerde hafta tatili iki gündür.
+                  </p>
+                  <p>
+                    Birinci fıkra hükmü dışında gazeteci, çocuğu dünyaya geldiği zaman üç; eşi veya çocuğu, anası veya babası öldüğü zaman dört; çocuğu evlendiği, kardeşi, büyük anne veya büyük babası veya torunu öldüğü zamanlar iki gün olağanüstü ücretli izine hak kazanır. Bu izinler senelik izinden sayılmaz.
+                  </p>
+                  <p className="pt-1 text-[13px] font-semibold text-gray-800 dark:text-gray-200">Çalışma Müddeti ve fazla mesai</p>
+                  <p className="font-semibold text-gray-800 dark:text-gray-200">Ek Madde 1 – (Değişik: 12/2/1954 - 6253/2 md; Değişik: 4/1/1961 - 212/1 md.)</p>
+                  <p>
+                    5953 sayılı Kanunun birinci maddesindeki gazeteci tabirinin şümulü içinde bulunan kimselerden müessese, matbaa, idarehane ve büro gibi yerlerde hizmetlerinin mahiyeti itibariyle müstemirren çalışanlar için günlük iş müddeti, gece ve gündüz devrelerinde sekiz saattir.
+                  </p>
+                  <p>
+                    Yukarıki fıkra hükmünün dışında kalarak, gündüz veya gece devresindeki çalışma müddetinin daha fazla hadlere artırılması ve ulusal bayram, genel tatiller ve hafta tatilinde çalışılması bu kanuna göre (Fazla saatlerde çalışma) sayılır.
+                  </p>
+                  <p>Pazar gününden başka bir gün hafta tatili yapan gazeteci, pazar günü fazla mesai yapmış sayılmaz.</p>
+                  <p>Her bir fazla çalışma saati için verilecek ücret, normal çalışma saati ücretinin % 50 fazlasıdır.</p>
+                  <p>
+                    Ancak, günlük normal çalışma müddetine ilaveten bu madde gereğince tatbik edilecek fazla çalışmaların saat 24 den sonraya tesadüf eden saatlerinde ücret bir misli fazlasiyle ödenir.
+                  </p>
+                  <p>Fazla saatlerin hesabında, yarım saatten az olan müddetler yarım saat, fazlası ise bir saat sayılır.</p>
+                  <p>
+                    Fazla saatlerde çalışma, ücretlerini parça başına veya yapılan iş miktarına göre alan gazetecilere yaptırıldığı takdirde dahi bu kimselerin fazla saatlere tekabül eden ücretleri bu maddedeki esaslara göre ödenir.
+                  </p>
+                  <p>
+                    Fazla çalışmalara ait ücretin, mütaakıp ücret tediyesiyle birlikte ödenmesi mecburidir. (İptal ikinci cümle: Anayasa Mahkemesinin 19/9/2019 tarihli ve E.:2019/48; K.:2019/74 sayılı Kararı ile)
+                  </p>
+                  <p>Fazla mesai günde üç saati geçemez.</p>
                 </div>
               </section>
 

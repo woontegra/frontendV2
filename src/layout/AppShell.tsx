@@ -30,6 +30,13 @@ export default function AppShell({ showLayout = true }: Props) {
         collapsed={sidebarCollapsed}
         onClose={() => setSidebarCollapsed(false)}
       />
+      {/* Masaüstü: sürüm şeridinin üstünde viewport genişliğinde tek çizgi (sidebar border-t ile ana alan hizası) */}
+      {!sidebarCollapsed && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed left-0 right-0 z-[33] hidden h-px bg-gray-200 dark:bg-gray-800 lg:block bottom-[4.5rem]"
+        />
+      )}
       <Header
         sidebarCollapsed={sidebarCollapsed}
         onSidebarToggle={() => setSidebarCollapsed((s) => {

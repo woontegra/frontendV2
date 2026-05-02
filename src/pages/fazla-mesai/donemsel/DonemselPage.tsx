@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { format } from "date-fns";
+import { format, startOfDay } from "date-fns";
 import FooterActions from "@/components/FooterActions";
 import { useToast } from "@/context/ToastContext";
 import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
@@ -13,13 +13,13 @@ import { usePageStyle } from "@/hooks/usePageStyle";
 import { getVideoLink } from "@/config/videoLinks";
 import { yukleHesap } from "@/core/kaydet/kaydetServisi";
 import {
-  computeDisplayRows,
   adaptToWordTable,
   buildWordTable,
   copySectionForWord,
   downloadPdfFromDOM,
   getAsgariUcretByDate,
   clampToLastDayOfMonth,
+  calculateOvertimeWith270AndLimitation,
   type FazlaMesaiRowBase,
 } from "@modules/fazla-mesai/shared";
 import type { SeasonalPattern, DonemselWitness, DonemselState } from "./types";
@@ -37,11 +37,16 @@ import {
   fmt,
   workDaysFromPattern,
   sevenModeFromPattern,
-  annualLeaveMetaFromSeasonalPattern,
   weeklyIgnoredWeekdayFromSeasonalPattern,
   toHtmlDateInputValue,
 } from "./utils";
-import { expandTanikliStandartRowsAnnualLeaveV2 } from "../tanikli-standart/tanikliStandartAnnualLeaveV2";
+import { splitByExclusions } from "@/modules/tanikli-standart/rules/splitByExclusions.rule";
+import {
+  calculateFm,
+  calculateRowMoney,
+  type TanikliRowWithSegmentFields,
+} from "@/modules/tanikli-standart/rules/calculateFm.rule";
+import { preserveWeeks, countWeeksBySevenDaySteps } from "@/modules/tanikli-standart/rules/preserveWeeks.rule";
 import SeasonalWorkPatternEditor from "./components/SeasonalWorkPatternEditor";
 import WitnessSeasonalEditor from "./components/WitnessSeasonalEditor";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
@@ -50,12 +55,13 @@ import { ZamanasimiModal } from "../standart/ZamanasimiModal";
 import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
 import { MahsuplasamaModal } from "../standart/MahsuplasamaModal";
-import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { Copy } from "lucide-react";
 
 const SSK_ORAN = 0.14;
 const ISSIZLIK_ORAN = 0.01;
+const DAMGA_VERGISI_ORANI = 0.00759;
+const YARGITAY_270_FM_DROP = 5.2;
 
 const inputCls =
   "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500";
@@ -263,17 +269,21 @@ export default function DonemselPage() {
         .filter(Boolean) as FazlaMesaiRowBase[];
     })();
 
-    if (!exclusions.length) return afterZaman;
-
-    const davaciLeaveMeta = annualLeaveMetaFromSeasonalPattern(summerPattern, isDonemselHaftalik);
-    const davaciWeeklyOffFallback = weeklyIgnoredWeekdayFromSeasonalPattern(summerPattern, isDonemselHaftalik);
-    return expandTanikliStandartRowsAnnualLeaveV2(
-      afterZaman as Array<FazlaMesaiRowBase & { dailyNet?: number }>,
-      exclusions,
-      davaciLeaveMeta.annualLeaveHg,
-      davaciWeeklyOffFallback,
-      davaciLeaveMeta.annualLeaveSevenDay
+    const davaciWeeklyOffFallback = weeklyIgnoredWeekdayFromSeasonalPattern(
+      summerPattern,
+      isDonemselHaftalik
     );
+    const originalTotalWeeks = afterZaman.reduce(
+      (a, r) => a + Math.max(0, Math.floor(Number(r.weeks) || 0)),
+      0
+    );
+    let pipeline = splitByExclusions(afterZaman as FazlaMesaiRowBase[], exclusions, {
+      weeklyOffDay: davaciWeeklyOffFallback,
+    });
+    pipeline = pipeline.map((r) => calculateFm(r as TanikliRowWithSegmentFields));
+    pipeline = preserveWeeks(pipeline, originalTotalWeeks);
+    pipeline = pipeline.map((r) => calculateRowMoney(r, katSayi || 1));
+    return pipeline;
   }, [donemselState, katSayi, zamanasimiBaslangic, isDonemselHaftalik, exclusions]);
 
   /** UBGT kataloğu: form beyanı değil, cetvel satırlarının (override sonrası) birleşik aralığı. */
@@ -342,35 +352,165 @@ export default function DonemselPage() {
   );
 
   const computedDisplayRows = useMemo(() => {
-    try {
-      return computeDisplayRows({
-        rows,
-        manualRows,
-        rowOverrides,
-        katSayi: katSayi || 1,
-        weeklyFMSaat: davaciWeeklyFM,
-        exclusions,
-        mode270,
-        iseGiris: donemselState.dateIn,
-        istenCikis: donemselState.dateOut,
-        zamanasimiBaslangic,
-        useRawWeeks: true,
-        skipAnnualLeaveExclusions: exclusions.length > 0,
-      }) as FazlaMesaiRowBase[];
-    } catch {
-      return rows;
-    }
-  }, [rows, manualRows, rowOverrides, katSayi, davaciWeeklyFM, exclusions, mode270, donemselState.dateIn, donemselState.dateOut, zamanasimiBaslangic]);
+    const kats = katSayi || 1;
+    const autoRows = (rows as FazlaMesaiRowBase[])
+      .filter((row) => !(rowOverrides[row.id] as { hidden?: boolean } | undefined)?.hidden)
+      .map((row) => {
+        const override = rowOverrides[row.id] as Partial<FazlaMesaiRowBase> | undefined;
+        const merged = (override ? { ...row, ...override } : { ...row }) as FazlaMesaiRowBase;
+        const startISO = merged.startISO ?? row.startISO;
+        const endISO = merged.endISO ?? row.endISO;
+        const hasDateOverride =
+          !!override && (override.startISO !== undefined || override.endISO !== undefined);
+        let weeksFromDates: number | undefined;
+        if (hasDateOverride && startISO && endISO) {
+          const a = startOfDay(new Date(startISO));
+          const b = startOfDay(new Date(endISO));
+          if (!Number.isNaN(+a) && !Number.isNaN(+b) && b >= a) {
+            weeksFromDates = countWeeksBySevenDaySteps(a, b);
+          }
+        }
+        let effectiveWeeks =
+          (override?.weeks as number | undefined) ?? weeksFromDates ?? merged.weeks ?? row.weeks;
+        if (
+          typeof effectiveWeeks === "number" &&
+          effectiveWeeks <= 0 &&
+          ((weeksFromDates ?? merged.weeks ?? row.weeks ?? 0) as number) > 0
+        ) {
+          effectiveWeeks = (weeksFromDates ?? merged.weeks ?? row.weeks ?? 0) as number;
+        }
+        if (
+          override &&
+          (override.weeks !== undefined ||
+            override.startISO !== undefined ||
+            override.endISO !== undefined ||
+            override.brut !== undefined ||
+            override.fmHours !== undefined ||
+            weeksFromDates !== undefined)
+        ) {
+          merged.weeks = Math.max(0, Math.floor(Number(effectiveWeeks) || 0));
+          merged.originalWeekCount =
+            (override.originalWeekCount as number | undefined) ?? merged.weeks;
+          if (override.brut != null) merged.brut = override.brut;
+          if (override.fmHours != null) merged.fmHours = override.fmHours;
+        }
+        return calculateRowMoney(merged, kats);
+      });
 
-  /**
-   * FM saati 0 olan otomatik satırlar cetvelde gösterilmez.
-   * Yeni eklenen manuel satır `fmHours: 0` ile gelir; filtreye takılırsa + hiç çalışmıyormuş gibi görünür — manuel satırlar her zaman listelenir.
-   */
+    const manualWithOverrides = (manualRows as FazlaMesaiRowBase[]).map((row) => {
+      const override = rowOverrides[row.id] as Partial<FazlaMesaiRowBase> | undefined;
+      const merged = (override ? { ...row, ...override } : { ...row }) as FazlaMesaiRowBase;
+      const startISO = merged.startISO ?? row.startISO;
+      const endISO = merged.endISO ?? row.endISO;
+      let weeksFromDates: number | undefined;
+      if (startISO && endISO) {
+        const sd = startOfDay(new Date(startISO));
+        const ed = startOfDay(new Date(endISO));
+        if (!Number.isNaN(+sd) && !Number.isNaN(+ed) && ed >= sd) {
+          weeksFromDates = countWeeksBySevenDaySteps(sd, ed);
+        }
+      }
+      let weeks = (merged.weeks as number | undefined) ?? weeksFromDates ?? 0;
+      if (weeks <= 0 && ((weeksFromDates ?? merged.weeks ?? 0) as number) > 0) {
+        weeks = (weeksFromDates ?? merged.weeks ?? 0) as number;
+      }
+      merged.weeks = Math.max(0, Math.floor(Number(weeks) || 0));
+      merged.originalWeekCount = merged.originalWeekCount ?? merged.weeks;
+      merged.fmHours = merged.fmHours ?? davaciWeeklyFM;
+      merged.brut = merged.brut ?? 0;
+      return calculateRowMoney(merged, kats);
+    });
+
+    const mergedList: FazlaMesaiRowBase[] = [];
+    for (const autoRow of autoRows) {
+      mergedList.push(autoRow);
+      const manualAfter = manualWithOverrides.filter(
+        (m) => (m as FazlaMesaiRowBase).insertAfter === autoRow.id
+      );
+      mergedList.push(...manualAfter);
+    }
+    const insertedManualIds = new Set(mergedList.filter((r) => r.isManual).map((r) => r.id));
+    mergedList.push(...manualWithOverrides.filter((m) => !insertedManualIds.has(m.id)));
+
+    let with270 = mergedList.map((r) => ({
+      ...r,
+      originalWeekCount: r.originalWeekCount ?? r.weeks,
+    }));
+
+    if (mode270 === "simple") {
+      with270 = with270.map((r) => {
+        const raw = Math.max(0, (Number(r.fmHours) || 0) - YARGITAY_270_FM_DROP);
+        const fmHours = Math.round(raw * 1e4) / 1e4;
+        return { ...r, fmHours };
+      });
+    } else if (mode270 === "detailed") {
+      const valid = with270.filter((r) => r.startISO && r.endISO);
+      const weeklyFM = valid[0]?.fmHours ?? davaciWeeklyFM;
+      const tabloSatirlari = valid.map((r) => ({
+        baslangic: new Date(r.startISO!),
+        bitis: new Date(r.endISO!),
+      }));
+      if (tabloSatirlari.length > 0 && donemselState.dateIn && donemselState.dateOut && weeklyFM > 0) {
+        const sonuclar = calculateOvertimeWith270AndLimitation({
+          iseGirisTarihi: new Date(donemselState.dateIn),
+          istenCikisTarihi: new Date(donemselState.dateOut),
+          haftalikFazlaMesaiSaati: weeklyFM,
+          zamanaSimiTarihi: zamanasimiBaslangic ? new Date(zamanasimiBaslangic) : undefined,
+          yillikIzinler: [],
+          tabloSatirlari,
+        });
+        with270 = with270.map((r) => {
+          const j = valid.findIndex((v) => v.id === r.id);
+          if (j >= 0 && sonuclar[j] != null) {
+            const rawWeeks = r.originalWeekCount ?? r.weeks ?? 0;
+            const adjusted = sonuclar[j].fmHafta;
+            const isManual = !!r.isManual;
+            const newWeeks = Number.isFinite(adjusted)
+              ? isManual && adjusted <= 0
+                ? Math.max(1, rawWeeks)
+                : adjusted > 0
+                  ? adjusted
+                  : rawWeeks
+              : rawWeeks;
+            return {
+              ...r,
+              weeks: newWeeks > 0 ? newWeeks : rawWeeks,
+              originalWeekCount: r.originalWeekCount ?? r.weeks,
+            } as FazlaMesaiRowBase;
+          }
+          return r;
+        });
+      }
+    }
+
+    return with270.map((r) => calculateRowMoney(r, kats));
+  }, [
+    rows,
+    manualRows,
+    rowOverrides,
+    katSayi,
+    davaciWeeklyFM,
+    mode270,
+    donemselState.dateIn,
+    donemselState.dateOut,
+    zamanasimiBaslangic,
+  ]);
+
+  /** Tanıklı/Haftalık Karma ile aynı: hafta/FM saati/FM tutarı 0 olan otomatik satırlar gizlenir. */
   const tableDisplayRows = useMemo(
     () =>
-      (computedDisplayRows as Array<{ fmHours?: number; fm?: number; isManual?: boolean; manual?: boolean }>).filter(
-        (r) => Number(r.fmHours ?? 0) !== 0 || !!(r.isManual ?? r.manual)
-      ),
+      (
+        computedDisplayRows as Array<{
+          fmHours?: number;
+          fm?: number;
+          weeks?: number;
+          isManual?: boolean;
+          manual?: boolean;
+        }>
+      ).filter((r) => {
+        if (r.isManual ?? r.manual) return true;
+        return Number(r.fmHours ?? 0) !== 0 && Number(r.weeks ?? 0) !== 0 && Number(r.fm ?? 0) !== 0;
+      }),
     [computedDisplayRows]
   );
 
@@ -770,6 +910,9 @@ export default function DonemselPage() {
                   showToastError={showToastError}
                 />
               </div>
+              <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed mt-2">
+                Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+              </p>
             </section>
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
@@ -838,7 +981,7 @@ export default function DonemselPage() {
                           colSpan={9}
                           className="px-2 py-4 border border-gray-200 dark:border-gray-600 text-center text-gray-500"
                         >
-                          FM saati 0 olan satırlar gösterilmez; görüntülenecek cetvel satırı yok.
+                          Hafta, FM saati veya fazla mesai tutarı 0 olan satırlar gösterilmez; görüntülenecek cetvel satırı yok.
                         </td>
                       </tr>
                     ) : (

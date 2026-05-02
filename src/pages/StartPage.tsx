@@ -46,7 +46,7 @@ const cardStyles: Record<string, { card: string; icon: string; accent: string }>
 export default function StartPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
-      <div className="max-w-5xl mx-auto">
+      <div className="w-full">
         <header className="text-center mb-10 sm:mb-14">
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 dark:text-white tracking-tight">
             Hangi hesabı yapmak istiyorsunuz?

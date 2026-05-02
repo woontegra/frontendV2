@@ -49,6 +49,7 @@ export { calculateOvertimeTable } from "./utils/calculateOvertimeTable";
 export { calculateOvertime } from "./utils/overtimeCalculator";
 export type { Interval as OTInterval, SalaryPeriod as OTSalaryPeriod } from "./utils/overtimeCalculator";
 export { calculateIncomeTaxForYear, calculateIncomeTaxWithBrackets } from "./utils/incomeTaxCore";
+export { splitByExclusionsBlocks } from "@/shared/utils/fm/blockSplitter";
 
 // === Modül Shared Constants ===
 export { getAsgariUcretPeriods } from "./constants/asgariUcretPeriods";

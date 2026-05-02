@@ -44,7 +44,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 px-4 py-8">
-      <div className="max-w-2xl mx-auto">
+      <div className="w-full">
         <div className="flex items-center justify-between mb-5">
           <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
             <Bell className="w-5 h-5" /> Bildirimler

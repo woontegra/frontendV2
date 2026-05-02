@@ -1,5 +1,8 @@
-import { Routes, Route, Navigate, Outlet, useLocation } from "react-router-dom";
-import { Toaster } from "@/context/ToastContext";
+import { useEffect, useRef } from "react";
+import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Toaster, useToast } from "@/context/ToastContext";
+import { apiClient } from "@/utils/apiClient";
+import { getAccessToken, isTokenExpired, refreshAccessToken } from "@/utils/authToken";
 import AppShell from "@/layout/AppShell";
 import GlobalCalculationTools from "@/components/GlobalCalculationTools";
 import ChatWidget from "@/components/chat/ChatWidget";
@@ -59,6 +62,7 @@ import HaftalikKarmaPage from "@/pages/fazla-mesai/haftalik-karma/HaftalikKarmaP
 import DonemselPage from "@/pages/fazla-mesai/donemsel/DonemselPage";
 import YeraltiIsciPage from "@/pages/fazla-mesai/yeralti-isci/YeraltiIsciPage";
 import Vardiya24_48Page from "@/pages/fazla-mesai/vardiya-24-48/Vardiya24_48Page";
+import Vardiya48Page from "@/pages/fazla-mesai/vardiya-24-48/Vardiya48Page";
 import GemiAdamiPage from "@/pages/fazla-mesai/gemi-adami/GemiAdamiPage";
 import EvIsciPage from "@/pages/fazla-mesai/ev-isci/EvIsciPage";
 import FazlaMesaiSelectionPage from "@/pages/fazla-mesai/FazlaMesaiSelectionPage";
@@ -98,10 +102,95 @@ import {
   LegacyHaftaStandardRedirect,
 } from "@/pages/hafta-tatili/HaftaTatiliLegacyRedirects";
 
+/** Same scope as aktuerya-frontend: no heartbeat / background refresh on these anonymous auth pages */
+const ANONYMOUS_AUTH_PATHS = ["/login", "/forgot-password", "/reset-password", "/unsubscribe"] as const;
+
 function App() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { show } = useToast();
+  const lastDateValidationToastRef = useRef(0);
   const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password", "/unsubscribe", "/change-password", "/professional-license-activation"];
   const isPublicPage = PUBLIC_PATHS.includes(location.pathname) || location.pathname.startsWith("/test-");
+
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      console.warn("[AUTH] Session expired");
+      show({ title: "Oturum süreniz doldu", variant: "error" });
+      navigate("/login");
+    };
+    window.addEventListener("auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("auth-expired", handleAuthExpired);
+  }, [navigate, show]);
+
+  useEffect(() => {
+    const onAnonymousAuthPage = (ANONYMOUS_AUTH_PATHS as readonly string[]).includes(location.pathname);
+    const token = getAccessToken();
+    if (onAnonymousAuthPage || !token) return;
+
+    const sendHeartbeat = () => {
+      apiClient(`/api/heartbeat`, { method: "POST" }).catch(() => {});
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const onAnonymousAuthPage = (ANONYMOUS_AUTH_PATHS as readonly string[]).includes(location.pathname);
+    if (onAnonymousAuthPage) return;
+    if (!getAccessToken()) return;
+
+    const checkAndRefreshToken = async () => {
+      if (!isTokenExpired()) return;
+      if (import.meta.env.DEV) console.log("[BACKGROUND REFRESH] Token expiring soon, refreshing...");
+      try {
+        const newToken = await refreshAccessToken();
+        if (import.meta.env.DEV) {
+          if (newToken) console.log("[BACKGROUND REFRESH] Token refreshed successfully");
+          else console.error("[BACKGROUND REFRESH] Token refresh failed");
+        }
+      } catch (e) {
+        if (import.meta.env.DEV) console.error("[BACKGROUND REFRESH] Token refresh error:", e);
+      }
+    };
+
+    void checkAndRefreshToken();
+    const interval = setInterval(() => void checkAndRefreshToken(), 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [location.pathname]);
+
+  // Global date-input validation: applies to all pages with <input type="date" />
+  useEffect(() => {
+    const maybeShowDateError = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLInputElement)) return;
+      if (target.type !== "date") return;
+      if (target.validity.valid) return;
+      const now = Date.now();
+      if (now - lastDateValidationToastRef.current < 1200) return;
+      lastDateValidationToastRef.current = now;
+      show({
+        title: "Geçersiz tarih",
+        description: "Lütfen geçerli bir tarih girin.",
+        variant: "error",
+      });
+    };
+
+    const onBlurCapture = (event: FocusEvent) => {
+      maybeShowDateError(event.target);
+    };
+
+    const onInvalidCapture = (event: Event) => {
+      maybeShowDateError(event.target);
+    };
+
+    document.addEventListener("blur", onBlurCapture, true);
+    document.addEventListener("invalid", onInvalidCapture, true);
+    return () => {
+      document.removeEventListener("blur", onBlurCapture, true);
+      document.removeEventListener("invalid", onInvalidCapture, true);
+    };
+  }, [show]);
 
   return (
     <>
@@ -213,6 +302,7 @@ function App() {
           <Route path="mevsim" element={<YillikIzinMevsimPage />} />
           <Route path="mevsim/:id" element={<YillikIzinMevsimPage />} />
           <Route path="basin/gunluk-olmayan" element={<YillikIzinBasinGunlukOlmayanPage />} />
+          <Route path="basin/gunluk-olmayan/:id" element={<YillikIzinBasinGunlukOlmayanPage />} />
           <Route path="basin" element={<YillikIzinBasinPage />} />
           <Route path="basin/:id" element={<YillikIzinBasinPage />} />
           <Route path="kismi" element={<YillikIzinKismiPage />} />
@@ -234,6 +324,10 @@ function App() {
           <Route path="donemsel-haftalik/:id" element={<DonemselPage />} />
           <Route path="yeralti-isci" element={<YeraltiIsciPage />} />
           <Route path="yeralti-isci/:id" element={<YeraltiIsciPage />} />
+          <Route path="vardiya-24" element={<Vardiya24_48Page />} />
+          <Route path="vardiya-24/:id" element={<Vardiya24_48Page />} />
+          <Route path="vardiya-48" element={<Vardiya48Page />} />
+          <Route path="vardiya-48/:id" element={<Vardiya48Page />} />
           <Route path="vardiya-24-48" element={<Vardiya24_48Page />} />
           <Route path="vardiya-24-48/:id" element={<Vardiya24_48Page />} />
           <Route path="gemi-adami" element={<GemiAdamiPage />} />

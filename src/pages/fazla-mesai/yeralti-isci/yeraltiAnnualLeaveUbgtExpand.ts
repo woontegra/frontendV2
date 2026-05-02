@@ -3,7 +3,7 @@
  * UBGT/izin hangi takvim haftasına denk geliyorsa o hafta ayrı satır, FM saati o haftanın çalışma kaybına göre yeniden hesaplanır.
  */
 
-import { addDays, startOfDay, startOfWeek } from "date-fns";
+import { addDays, startOfDay } from "date-fns";
 import type { ExcludedDay } from "@/utils/exclusionStorage";
 import { parseIsoDateLocal } from "@/pages/hafta-tatili/calculations";
 import { countAnnualLeaveCalendarDaysInWindow } from "@/shared/utils/fazlaMesai/annualLeaveCalendarDays";
@@ -36,6 +36,7 @@ const GELIR_VERGISI_ORANI = 0.15;
 const EPS = 1e-7;
 
 const FM_EXCLUSION_TYPES: readonly string[] = ["Yıllık İzin", "UBGT", "Rapor", "Diğer"];
+type LeaveBlock = { start: Date; end: Date; anchors: Date[] };
 
 function dateMax(a: Date, b: Date): Date {
   return a > b ? a : b;
@@ -118,6 +119,66 @@ function formatFmDeductionCaption(
   return `(${n} gün dışlama düşülmüştür: yıllık izin / UBGT / diğer)`;
 }
 
+function isWorkDay(d: Date, weeklyOffDay: number | null): boolean {
+  if (weeklyOffDay == null) return true;
+  return d.getDay() !== weeklyOffDay;
+}
+
+function materializeAnchors(exclusions: ExcludedDay[], weeklyOffDay: number | null): Date[] {
+  const out: Date[] = [];
+  for (const ex of exclusions) {
+    if (!FM_EXCLUSION_TYPES.includes(ex.type ?? "")) continue;
+    const s = parseIsoDateLocal(String(ex.start ?? "").slice(0, 10));
+    const e = parseIsoDateLocal(String(ex.end ?? "").slice(0, 10));
+    if (!s || !e || s > e) continue;
+    const cap = Number(ex.days) > 0 && Number.isFinite(Number(ex.days)) ? Math.floor(Number(ex.days)) : null;
+    let used = 0;
+    let cur = startOfDay(s);
+    while (cur <= e) {
+      if (cap != null && used >= cap) break;
+      if (isWorkDay(cur, weeklyOffDay)) {
+        out.push(startOfDay(cur));
+        if (cap != null) used += 1;
+      }
+      cur = addDays(cur, 1);
+    }
+  }
+  out.sort((a, b) => a.getTime() - b.getTime());
+  const uniq: Date[] = [];
+  const seen = new Set<string>();
+  for (const d of out) {
+    const k = toISODate(d);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(d);
+  }
+  return uniq;
+}
+
+function buildSevenDayBlocksForSegment(
+  segStart: Date,
+  segEnd: Date,
+  exclusions: ExcludedDay[],
+  weeklyOffDay: number | null
+): LeaveBlock[] {
+  const anchors = materializeAnchors(exclusions, weeklyOffDay).filter((d) => d >= segStart && d <= segEnd);
+  if (anchors.length === 0) return [];
+  const out: LeaveBlock[] = [];
+  let i = 0;
+  while (i < anchors.length) {
+    const start = startOfDay(anchors[i]);
+    const nominalEnd = addDays(start, 6);
+    const end = nominalEnd > segEnd ? segEnd : nominalEnd;
+    const group: Date[] = [];
+    while (i < anchors.length && anchors[i].getTime() <= end.getTime()) {
+      group.push(anchors[i]);
+      i += 1;
+    }
+    out.push({ start, end, anchors: group });
+  }
+  return out;
+}
+
 function yeraltiFmNet(weeks: number, brut: number, kats: number, fmHours: number): { fm: number; net: number } {
   const step1 = Number((weeks * brut * kats * fmHours).toFixed(6));
   const step2 = Number((step1 / FAZLA_MESAI_DENOMINATOR).toFixed(6));
@@ -156,39 +217,28 @@ function expandOneYeraltiRow(
   const hgSafe = hgFromCaller;
   const sevenDayForRow = davaciSevenDay;
 
-  type LeaveHit = { weekStart: Date; weekEnd: Date; clipStart: Date; clipEnd: Date; leaveDaysInt: number };
+  type LeaveHit = { clipStart: Date; clipEnd: Date; leaveDaysInt: number };
   const leaveHits: LeaveHit[] = [];
-
-  let weekMon = startOfWeek(segStart, { weekStartsOn: 1 });
-  const lastMon = startOfWeek(segEnd, { weekStartsOn: 1 });
-
-  while (weekMon <= lastMon) {
-    const weekSun = addDays(weekMon, 6);
-    const clipStart = dateMax(segStart, weekMon);
-    const clipEnd = dateMin(segEnd, weekSun);
+  const leaveBlocks = buildSevenDayBlocksForSegment(segStart, segEnd, exclusions, weeklyOffDay);
+  for (const blk of leaveBlocks) {
+    const clipStart = dateMax(segStart, blk.start);
+    const clipEnd = dateMin(segEnd, blk.end);
     if (clipStart <= clipEnd) {
-      let leaveDaysInt = Math.min(
-        hgSafe,
-        countAnnualLeaveCalendarDaysInWindow(clipStart, clipEnd, exclusions, weeklyOffDay, [...FM_EXCLUSION_TYPES])
-      );
+      let leaveDaysInt = Math.min(hgSafe, blk.anchors.length);
+      if (leaveDaysInt <= 0) {
+        leaveDaysInt = Math.min(
+          hgSafe,
+          countAnnualLeaveCalendarDaysInWindow(clipStart, clipEnd, exclusions, weeklyOffDay, [...FM_EXCLUSION_TYPES])
+        );
+      }
       if (leaveDaysInt <= 0) {
         const declaredDays = countDeclaredOverlapDaysInt(clipStart, clipEnd, exclusions, FM_EXCLUSION_TYPES);
         if (declaredDays > 0) leaveDaysInt = Math.min(hgSafe, declaredDays);
       }
-      if (leaveDaysInt >= 1) {
-        leaveHits.push({
-          weekStart: new Date(weekMon),
-          weekEnd: new Date(weekSun),
-          clipStart,
-          clipEnd,
-          leaveDaysInt,
-        });
-      }
+      if (leaveDaysInt >= 1) leaveHits.push({ clipStart, clipEnd, leaveDaysInt });
     }
-    weekMon = addDays(weekMon, 7);
   }
-
-  leaveHits.sort((a, b) => a.weekStart.getTime() - b.weekStart.getTime());
+  leaveHits.sort((a, b) => a.clipStart.getTime() - b.clipStart.getTime());
 
   if (leaveHits.length === 0) return [row];
 
@@ -204,8 +254,7 @@ function expandOneYeraltiRow(
       H += 1;
       return;
     }
-    const monIso = toISODate(hit.weekStart);
-    const brutW = getAsgariUcretByDate(monIso) || 0;
+    const brutW = getAsgariUcretByDate(toISODate(hit.clipStart)) || 0;
     const caption = formatFmDeductionCaption(
       hgSafe,
       hit.leaveDaysInt,

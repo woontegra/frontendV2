@@ -17,7 +17,7 @@ export default function KidemSubpagePlaceholderPage({ title, description }: Prop
     <>
       <div style={{ height: "2px", background: pageStyle?.color || "#1E88E5" }} />
       <div className="min-h-[calc(100vh-3.5rem)] bg-gray-50 dark:bg-gray-900 px-4 py-8">
-        <div className="max-w-lg mx-auto">
+        <div className="w-full">
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-lg p-6 text-center">
             <Construction className="h-10 w-10 text-amber-500 mx-auto mb-3" />
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h1>

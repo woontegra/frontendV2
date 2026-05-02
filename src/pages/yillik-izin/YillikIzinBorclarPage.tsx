@@ -31,7 +31,7 @@ const NOTE_ITEMS: string[] = [
 ];
 
 const SAVE_TYPE = "Yıllık Ücretli İzin";
-const DOCUMENT_TITLE = "Mercan Danışmanlık | Borçlar Kanunu Yıllık Ücretli İzin";
+const DOCUMENT_TITLE = "Bilirkişi Hesap | Borçlar Kanunu Yıllık Ücretli İzin";
 const REPORT_TITLE = "Borçlar Kanunu Yıllık Ücretli İzin";
 const RECORD_TYPE = "yillik_izin_borclar";
 const REDIRECT_PATH = "/yillik-izin/borclar";
@@ -133,6 +133,7 @@ export default function YillikIzinBorclarPage() {
   const [issizlik, setIssizlik] = useState(0);
   const [gelirVergisi, setGelirVergisi] = useState(0);
   const [gelirVergisiDilimleri, setGelirVergisiDilimleri] = useState("");
+
   const [damgaVergisi, setDamgaVergisi] = useState(0);
   const [netIzin, setNetIzin] = useState(0);
 
@@ -144,6 +145,12 @@ export default function YillikIzinBorclarPage() {
     const wp = calcWorkPeriodBilirKisi(iseGiris, istenCikis);
     return { yil: wp.years, ay: wp.months, gun: wp.days, label: wp.label };
   }, [iseGiris, istenCikis]);
+
+  const totalLeaveDaysPreview = useMemo(() => {
+    if (!iseGiris || !istenCikis || diff.yil < 0) return 0;
+    const weeklyDays = is18Or50 ? 21 : 14;
+    return weeklyDays * diff.yil;
+  }, [iseGiris, istenCikis, diff.yil, is18Or50]);
 
   const selectedYear = useMemo(() => {
     if (istenCikis) {
@@ -189,6 +196,11 @@ export default function YillikIzinBorclarPage() {
 
     if (!iseGiris || !istenCikis || diff.yil < 0) {
       reset();
+      return;
+    }
+
+    if (!brutUcret) {
+      setBreakdown((prev) => ({ ...prev, total: totalLeaveDaysPreview }));
       return;
     }
 
@@ -243,7 +255,7 @@ export default function YillikIzinBorclarPage() {
     };
 
     run();
-  }, [diff.yil, brutUcret, rows, selectedYear, is18Or50, iseGiris, istenCikis, showToastError]);
+  }, [diff.yil, brutUcret, rows, selectedYear, is18Or50, iseGiris, istenCikis, showToastError, totalLeaveDaysPreview]);
 
   useEffect(() => {
     if (!effectiveId || loadedIdRef.current === effectiveId) return;
@@ -788,14 +800,8 @@ export default function YillikIzinBorclarPage() {
         <ReportContentFromConfig config={reportConfig} />
       </div>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
-              Borçlar Kanunu Yıllık İzin Hesaplama
-            </h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">6098 sayılı Borçlar Kanunu kapsamı</p>
-          </div>
+      <div className="max-w-2xl lg:max-w-5xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
           {videoLink && (
             <Button
               type="button"
@@ -905,9 +911,7 @@ export default function YillikIzinBorclarPage() {
                     <span className="text-blue-500">×</span>
                     <span className="text-gray-700 dark:text-gray-300">{diff.yil} yıl</span>
                     <span className="text-blue-500">=</span>
-                    <span className="px-3 py-1 rounded-full bg-blue-600 text-white font-bold tabular-nums">
-                      {breakdown.total} gün
-                    </span>
+                    <span className="px-3 py-1 rounded-full bg-blue-600 text-white font-bold tabular-nums">{totalLeaveDaysPreview} gün</span>
                   </>
                 ) : (
                   <>
@@ -915,9 +919,7 @@ export default function YillikIzinBorclarPage() {
                     <span className="text-blue-500">×</span>
                     <span className="text-gray-700 dark:text-gray-300">{diff.yil} yıl</span>
                     <span className="text-blue-500">=</span>
-                    <span className="px-3 py-1 rounded-full bg-blue-600 text-white font-bold tabular-nums">
-                      {breakdown.total} gün
-                    </span>
+                    <span className="px-3 py-1 rounded-full bg-blue-600 text-white font-bold tabular-nums">{totalLeaveDaysPreview} gün</span>
                   </>
                 )}
               </div>

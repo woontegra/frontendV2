@@ -10,22 +10,57 @@ export type WorkPeriod = {
   gunSayisi?: number;
 };
 
+function parseDateStrict(value: string): Date | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  // yyyy-mm-dd
+  let y = 0;
+  let m = 0;
+  let d = 0;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (iso) {
+    y = Number(iso[1]);
+    m = Number(iso[2]);
+    d = Number(iso[3]);
+  } else {
+    // dd.mm.yyyy
+    const tr = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(raw);
+    if (!tr) return null;
+    d = Number(tr[1]);
+    m = Number(tr[2]);
+    y = Number(tr[3]);
+  }
+
+  const dt = new Date(y, m - 1, d);
+  if (isNaN(dt.getTime())) return null;
+  // Taşan/invalid tarihleri ele (örn. 2005-02-29 => 2005-03-01)
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
+function toISODateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function calculateDaysBetween(startDate: string, endDate: string): number {
   if (!startDate || !endDate) return 0;
   try {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+    const start = parseDateStrict(startDate);
+    const end = parseDateStrict(endDate);
+    if (!start || !end) return 0;
     if (end < start) return 0;
     const startYear = start.getFullYear();
     const startMonth = start.getMonth();
     const startDay = start.getDate();
     const endYear = end.getFullYear();
     const endMonth = end.getMonth();
-    const endDay = end.getDate();
+    const endDay = Math.min(30, end.getDate());
     const totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
-    const dayDiff = endDay - startDay;
-    return totalMonths * 30 + dayDiff + 1;
+    return totalMonths * 30 + (endDay - startDay) + 1;
   } catch {
     return 0;
   }
@@ -65,9 +100,9 @@ export function calculateGemiIzin(workPeriods: WorkPeriod[]): number {
 
     workPeriods.forEach((period) => {
       if (!period.iseGiris || !period.istenCikis) return;
-      const startDate = new Date(period.iseGiris);
-      const endDate = new Date(period.istenCikis);
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return;
+      const startDate = parseDateStrict(period.iseGiris);
+      const endDate = parseDateStrict(period.istenCikis);
+      if (!startDate || !endDate) return;
       const startYear = startDate.getFullYear();
       const endYear = endDate.getFullYear();
       for (let year = startYear; year <= endYear; year++) {
@@ -75,8 +110,8 @@ export function calculateGemiIzin(workPeriods: WorkPeriod[]): number {
         const yearStart = year === startYear ? startDate : new Date(year, 0, 1);
         const yearEnd = year === endYear ? endDate : new Date(year, 11, 31);
         const daysInThisYear = calculateDaysBetween(
-          yearStart.toISOString().split("T")[0],
-          yearEnd.toISOString().split("T")[0]
+          toISODateLocal(yearStart),
+          toISODateLocal(yearEnd)
         );
         yearlyDays[year] += daysInThisYear;
       }
@@ -108,9 +143,9 @@ export function calculateGemiBreakdown(workPeriods: WorkPeriod[]) {
 
     workPeriods.forEach((period) => {
       if (!period.iseGiris || !period.istenCikis) return;
-      const startDate = new Date(period.iseGiris);
-      const endDate = new Date(period.istenCikis);
-      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return;
+      const startDate = parseDateStrict(period.iseGiris);
+      const endDate = parseDateStrict(period.istenCikis);
+      if (!startDate || !endDate) return;
       const startYear = startDate.getFullYear();
       const endYear = endDate.getFullYear();
       for (let year = startYear; year <= endYear; year++) {
@@ -118,8 +153,8 @@ export function calculateGemiBreakdown(workPeriods: WorkPeriod[]) {
         const yearStart = year === startYear ? startDate : new Date(year, 0, 1);
         const yearEnd = year === endYear ? endDate : new Date(year, 11, 31);
         const daysInThisYear = calculateDaysBetween(
-          yearStart.toISOString().split("T")[0],
-          yearEnd.toISOString().split("T")[0]
+          toISODateLocal(yearStart),
+          toISODateLocal(yearEnd)
         );
         yearlyDays[year] += daysInThisYear;
       }

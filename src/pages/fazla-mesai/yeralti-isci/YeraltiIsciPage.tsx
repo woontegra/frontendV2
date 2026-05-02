@@ -1165,6 +1165,10 @@ export default function YeraltiIsciPage() {
               />
             </div>
 
+            <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
+              Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+            </p>
+
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden shadow-sm bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">
                 <h2 className={sectionTitleCls}>Fazla Mesai Cetveli (Yeraltı)</h2>
