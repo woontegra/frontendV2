@@ -9,6 +9,24 @@ type Props = {
   showLayout?: boolean;
 };
 
+/** Masaüstü tam genişlik ayırıcı çizgi: yalnızca form ağırlıklı hesaplama rotalarında (panel/start vb. hariç). */
+function shouldShowSidebarFooterAlignLine(pathname: string): boolean {
+  const p = (pathname.split("?")[0] || "/").replace(/\/+$/, "") || "/";
+  if (p === "/dashboard" || p === "/panel/start") return false;
+  if (p.startsWith("/admin")) return false;
+  if (p.startsWith("/profile")) return false;
+  const moduleSelectionOnly = new Set([
+    "/kidem-tazminati",
+    "/ihbar-tazminati",
+    "/fazla-mesai",
+    "/yillik-izin",
+    "/hafta-tatili",
+    "/ubgt",
+  ]);
+  if (moduleSelectionOnly.has(p)) return false;
+  return true;
+}
+
 export default function AppShell({ showLayout = true }: Props) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("sidebarCollapsed") === "true"
@@ -30,8 +48,8 @@ export default function AppShell({ showLayout = true }: Props) {
         collapsed={sidebarCollapsed}
         onClose={() => setSidebarCollapsed(false)}
       />
-      {/* Masaüstü: sürüm şeridinin üstünde viewport genişliğinde tek çizgi (sidebar border-t ile ana alan hizası) */}
-      {!sidebarCollapsed && (
+      {/* Masaüstü: sürüm şeridinin üstünde viewport genişliğinde tek çizgi (yalnızca hesaplama formlarında hizalama için) */}
+      {!sidebarCollapsed && shouldShowSidebarFooterAlignLine(location.pathname) && (
         <div
           aria-hidden
           className="pointer-events-none fixed left-0 right-0 z-[33] hidden h-px bg-gray-200 dark:bg-gray-800 lg:block bottom-[4.5rem]"
