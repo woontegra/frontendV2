@@ -73,9 +73,9 @@ export default function AdminEmailNotifications() {
     },
     {
       name: "Barolara Özel Teklif",
-      description: "Baro avukatlarına özel %25 indirim teklifi",
+      description: "Baro avukatlarına özel %40 indirim teklifi",
       templateId: "baro",
-      subject: "Baronuz Avukatlarına Özel %25 İndirim – İşçilik Alacaklarını 30 Saniyede Hesaplayın",
+      subject: "Baronuz Avukatlarına Özel %40 İndirim – İşçilik Alacaklarını 30 Saniyede Hesaplayın",
       recipientType: "custom",
       message: `Sayın Baro Yetkilisi,
 
@@ -97,7 +97,9 @@ Program ile hesaplanabilen başlıca işçilik alacakları:
 • İşe Başlatmama Tazminatı
 • Boşta Geçen Süre Ücreti
 
-Baronuz avukatlarına özel olarak programımız için %25 indirim tanımlamak isteriz.
+Baronuz avukatlarına özel olarak programımız için %40 indirim tanımlamak isteriz.
+
+Baronuz uygun görürse, üyelerinize duyurulmak üzere özel indirim bağlantısı ve iş birliğine ilişkin sözleşme taslağı tarafınıza iletilebilir.
 
 Programımız ile ilgili videolara ulaşmak için aşağıdaki bağlantıya tıklayabilirsiniz: https://www.youtube.com/@bilirkisihesap`
     },
