@@ -113,6 +113,11 @@ type Props = {
   showYemekInput?: boolean;
   showDigerInput?: boolean;
   showExtras?: boolean;
+  /**
+   * Prim/ikramiye/yol/yemek, dinamik ek kalemler ve içe aktar–kaydet bloğu.
+   * false: sadece çıplak brüt + toplam (ör. İş Arama İzni Ücreti sayfası).
+   */
+  showExtraCalculationsSection?: boolean;
   /** true ise dış kart render edilmez (üst sayfa kartına gömülü) */
   embedInCard?: boolean;
 };
@@ -150,6 +155,7 @@ export default function KidemTazminatiForm({
   showYemekInput = true,
   showDigerInput = false,
   showExtras = true,
+  showExtraCalculationsSection = true,
   embedInCard = false,
 }: Props) {
   const { error, success } = useToast();
@@ -615,6 +621,7 @@ export default function KidemTazminatiForm({
       )}
 
       {/* Ekstra Hesaplamalar - Davacı Ücreti ile aynı düzen */}
+      {showExtraCalculationsSection && (
       <div className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
           <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-200 inline-flex items-center gap-2 whitespace-nowrap">
@@ -911,6 +918,7 @@ export default function KidemTazminatiForm({
           )}
         </div>
       </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-200 dark:border-gray-600 mt-4">
         <div className="text-xs text-gray-600 dark:text-gray-400">Toplam</div>

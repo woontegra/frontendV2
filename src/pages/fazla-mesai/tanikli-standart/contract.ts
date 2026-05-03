@@ -43,11 +43,6 @@ export interface FormValues {
   istenCikis: string;
   weeklyDays: number | string;
   haftaTatiliGunu?: number | "";
-  /**
-   * 24/48 vardiya: 7 günlük özet kovası (bilanço haftası) başlangıç tarihi.
-   * Boşsa işe giriş (`iseGiris`) kullanılır; Pazartesi zorunluluğu yoktur.
-   */
-  vardiyaWeekBucketStart?: string;
   davaci: DavaciBeyan;
   taniklar: Witness[];
   mode270: Mode270;

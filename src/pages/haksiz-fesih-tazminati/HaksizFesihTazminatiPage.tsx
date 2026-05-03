@@ -56,10 +56,24 @@ function parseSavedPayload(raw: unknown): Record<string, unknown> {
   return inner as Record<string, unknown>;
 }
 
-const NOTE_BLOCKS: string[] = [
-  "6098 sayılı Kanun kapsamında hizmet sözleşmesi ile çalışanlar kıdem tazminatı alacağına hak kazanamazken haksız fesih tazminatı alacağı talep edilebilirler; 6098 sayılı Kanun'un 438 inci maddesinde öngörülen şartlar gerçekleştiği takdirde bu tazminata hak kazanabilirler.",
-  "TBK'nın \"b. Haklı sebebe dayanmayan fesihte\" başlıklı 438. maddesinde işverenin haklı sebep olmaksızın hizmet sözleşmesini derhâl feshetmesi halinde işçinin tazminat isteyebileceği; belirli süreli sözleşmelerde süreye uyulmaması durumunda tazminat; tasarruf ve diğer gelirlerin mahsubu; hâkimin serbest takdiriyle tazminat (ancak altı aylık ücreti aşmamak üzere) düzenlenmiştir.",
-  "Haksız fesih tazminatı, yapılan feshin haksız olması sebebiyle işçiye ödenir. Ancak belirlenecek tazminat, işçinin 6 aylık ücretinden fazla olamaz. Haksız fesih tazminatı, bakiye ücret tazminatından ayrı bir tazminat türüdür.",
+type NoteBlock = { text: string; emphasis?: "warning" };
+
+const NOTE_BLOCKS: NoteBlock[] = [
+  { text: "6098 sayılı Kanun kapsamında hizmet sözleşmesi ile çalışanlar kıdem tazminatı alacağına hak kazanamazken haksız fesih tazminatı alacağı talep edilebilirler; 6098 sayılı Kanun'un 438 inci maddesinde öngörülen şartlar gerçekleştiği takdirde bu tazminata hak kazanabilirler." },
+  {
+    text: 'TBK nun "b. Haklı sebebe dayanmayan fesihte" başlıklı 438 maddesinde "İşveren, haklı sebep olmaksızın hizmet sözleşmesini derhâl feshederse işçi, belirsiz süreli sözleşmelerde, fesih bildirim süresine; belirli süreli sözleşmelerde ise, sözleşme süresine uyulmaması durumunda, bu sürelere uyulmuş olsaydı kazanabileceği miktarı, tazminat olarak isteyebilir.',
+  },
+  {
+    text: "Belirli süreli hizmet sözleşmesinde işçinin hizmet sözleşmesinin sona ermesi yüzünden tasarruf ettiği miktar ile başka bir işten elde ettiği veya bilerek elde etmekten kaçındığı gelir, tazminattan indirilir.",
+  },
+  {
+    text: 'Hâkim, bütün durum ve koşulları göz önünde tutarak, ayrıca miktarını serbestçe belirleyeceği bir tazminatın işçiye ödenmesine karar verebilir; ancak belirlenecek tazminat miktarı, işçinin altı aylık ücretinden fazla olamaz." Şeklinde düzenlenmiştir.',
+  },
+  { text: "Haksız fesih tazminatı, yapılan feshin haksız olması sebebiyle işçiye ödenir." },
+  { text: "Ancak belirlenecek tazminat, işçinin 6 aylık ücretinden fazla olamaz.", emphasis: "warning" },
+  {
+    text: "Haksız fesih tazminatı, bakiye ücret tazminatından ayrı bir tazminat türüdür ve bu tazminata ek olarak verilir.",
+  },
 ];
 
 export default function HaksizFesihTazminatiPage() {
@@ -558,15 +572,19 @@ export default function HaksizFesihTazminatiPage() {
 
               <section>
                 <h2 className={sectionTitleCls}>Notlar</h2>
-                <div className="rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5 mt-1 space-y-2">
-                  {NOTE_BLOCKS.map((p, i) => (
-                    <p key={i} className="text-[11px] font-light text-gray-500 dark:text-gray-400">
-                      {p}
+                <div className="rounded border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-900/30 p-2.5 sm:p-3 mt-1 space-y-2 max-h-[min(50vh,26rem)] overflow-y-auto">
+                  {NOTE_BLOCKS.map((block, i) => (
+                    <p
+                      key={i}
+                      className={
+                        block.emphasis === "warning"
+                          ? "text-xs font-medium text-red-600 dark:text-red-400 leading-relaxed"
+                          : "text-xs font-light text-gray-600 dark:text-gray-400 leading-relaxed"
+                      }
+                    >
+                      {block.text}
                     </p>
                   ))}
-                  <p className="text-[11px] font-light text-red-600 dark:text-red-400">
-                    Ancak belirlenecek tazminat, işçinin 6 aylık ücretinden fazla olamaz.
-                  </p>
                 </div>
               </section>
             </div>

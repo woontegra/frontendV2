@@ -2,7 +2,7 @@
  * 24 / 48 saat vardiya fazla mesai — tek sayfa; üstte mod seçimi.
  * 24: yerel calculate24System. 48 (24/48): yerel calculate48System (bilirkişi 3 saat/vardiya günü, ISO hafta 6 veya 9 saat).
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { addDays, startOfDay } from "date-fns";
 import FooterActions from "@/components/FooterActions";
@@ -17,6 +17,7 @@ import { getAsgariUcretByDate } from "@modules/fazla-mesai/shared";
 import type { ExcludedDay } from "@/shared/utils/exclusionStorage";
 import { YillikIzinPanel } from "../standart/YillikIzinPanel";
 import { UbgtFmDayPicker } from "../standart/UbgtFmDayPicker";
+import { isV48TransitionMotorNote } from "../../../utils/fazlaMesai/vardiya24/vardiya48TransitionNotes";
 import { ZamanasimiModal } from "../standart/ZamanasimiModal";
 import { ZamanasimiCetvelBanner } from "../standart/ZamanasimiCetvelBanner";
 import { KatsayiModal } from "../standart/KatsayiModal";
@@ -31,8 +32,7 @@ import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { buildMergedWitnessSegments } from "@/modules/fazla-mesai/shared/utils/witnessOvertimeSegments";
 import { calculate24System } from "../../../utils/fazlaMesai/vardiya24/calculate24System";
-import { calculate48System, calculate48SystemWithDebug } from "../../../utils/fazlaMesai/vardiya24/calculate48System";
-import { reallocateVardiya48UbgtDonorFromTwoDayColumn } from "./reallocateVardiya48UbgtDonorRows";
+import { calculate48System } from "../../../utils/fazlaMesai/vardiya24/calculate48System";
 
 const RECORD_24 = "fazla_mesai_vardiya_24";
 const RECORD_48 = "fazla_mesai_vardiya_48";
@@ -245,106 +245,6 @@ function anchorForSegment(globalStart: string, segmentStart: string, baseAnchorI
   return diffDays % 2 === 0 ? baseAnchorIsWorkDay : !baseAnchorIsWorkDay;
 }
 
-/** Sayfadaki onay kutusu (ref); runBackend öncesi güncellenir. */
-const vardiya48DebugUiRef = { current: false };
-
-/** URL `?vardiyaDebug=1` | sessionStorage | window bayrakları */
-function vardiya48DebugEnabled(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const u = new URL(window.location.href);
-    const q = u.searchParams.get("vardiyaDebug") ?? u.searchParams.get("debug48");
-    if (q === "1" || String(q || "").toLowerCase() === "true") return true;
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (window.sessionStorage.getItem("aktuerya:vardiya48:debug") === "1") return true;
-  } catch {
-    /* quota / private */
-  }
-  const w = window as unknown as { __VARDIYA_DEBUG__?: unknown; __VARDIYA_48_DEBUG__?: unknown };
-  const on = (v: unknown) =>
-    v === true ||
-    v === 1 ||
-    v === "1" ||
-    (typeof v === "string" && ["true", "yes", "on"].includes(v.trim().toLowerCase()));
-  return on(w.__VARDIYA_DEBUG__) || on(w.__VARDIYA_48_DEBUG__);
-}
-
-function vardiya48DebugEffective(): boolean {
-  return vardiya48DebugUiRef.current || vardiya48DebugEnabled();
-}
-
-function logVardiya48Debug(label: string, payload?: unknown) {
-  if (!vardiya48DebugEffective()) return;
-  // console.info: Chrome’da Varsayılan seviyede görünür; console.log sık sık “Verbose”da kalır.
-  // eslint-disable-next-line no-console
-  console.info(`[Vardiya48][DEBUG] ${label}`, payload);
-}
-
-function logDebugLines48(label: string, lines: string[]) {
-  if (!vardiya48DebugEffective()) return;
-  // eslint-disable-next-line no-console
-  console.info(`[Vardiya48][DEBUG] ${label} (count=${lines.length})`);
-  lines.forEach((line, idx) => {
-    // eslint-disable-next-line no-console
-    console.info(`[Vardiya48][DEBUG] ${label}[${idx}] ${line}`);
-  });
-}
-
-function readInitialMotorConsoleLog48(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const u = new URL(window.location.href);
-    const q = u.searchParams.get("vardiyaDebug") ?? u.searchParams.get("debug48");
-    if (q === "1" || String(q || "").toLowerCase() === "true") return true;
-    if (window.sessionStorage.getItem("aktuerya:vardiya48:debug") === "1") return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
-function summarizeMotorRows48(
-  rows: Array<{ startDate: string; endDate: string; weekType: string | number; weekCount: number; weeklyFmHours: number; note?: string }>
-) {
-  return rows.map((r) => ({
-    start: (r.startDate || "").slice(0, 10),
-    end: (r.endDate || "").slice(0, 10),
-    type: String(r.weekType),
-    weeks: Number(r.weekCount) || 0,
-    fmH: Number(r.weeklyFmHours) || 0,
-    note: String(r.note || ""),
-  }));
-}
-
-function formatMotorRowsForLog(
-  rows: Array<{ startDate: string; endDate: string; weekType: string | number; weekCount: number; weeklyFmHours: number; note?: string }>
-): string[] {
-  return summarizeMotorRows48(rows).map(
-    (r) => `start=${r.start} end=${r.end} type=${r.type} weeks=${r.weeks} fmH=${r.fmH} note=${r.note || "-"}`
-  );
-}
-
-function summarizeUiRows48(rows: VardiyaRow[]) {
-  return rows.map((r) => ({
-    start: (r.startISO || "").slice(0, 10),
-    end: (r.endISO || "").slice(0, 10),
-    type: String(r.weekTypeLabel || ""),
-    weeks: Number(r.weeks) || 0,
-    fmH: Number(r.fmHours) || 0,
-    fm: Number(r.fm) || 0,
-    note: String(r.yillikIzinAciklama || ""),
-  }));
-}
-
-function formatUiRowsForLog48(rows: VardiyaRow[]): string[] {
-  return summarizeUiRows48(rows).map(
-    (r) => `start=${r.start} end=${r.end} type=${r.type} weeks=${r.weeks} fmH=${r.fmH} fm=${r.fm} note=${r.note || "-"}`
-  );
-}
-
 export default function Vardiya48Page() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -367,6 +267,18 @@ export default function Vardiya48Page() {
     updateWitness,
   } = useTanikliStandartState();
 
+  /** 48 saat motorunda UBGT ve yıllık izin dışlaması yok; diğer dışlamalar (rapor vb.) kalır. */
+  const exclusionsFor48 = useMemo(
+    () =>
+      Array.isArray(exclusions)
+        ? (exclusions as ExcludedDay[]).filter((e) => {
+            const t = String(e.type || "").trim();
+            return t !== "UBGT" && t !== "Yıllık İzin";
+          })
+        : [],
+    [exclusions]
+  );
+
   const forcedMode = useMemo<"24" | "48" | null>(() => forcedModeFromPath(location.pathname), [location.pathname]);
   const [vardiyaMode, setVardiyaMode] = useState<"24" | "48">(() => forcedModeFromPath(window.location.pathname) || readStoredVardiyaMode());
   const [rows, setRows] = useState<VardiyaRow[]>([]);
@@ -378,16 +290,10 @@ export default function Vardiya48Page() {
   const [localIseGiris, setLocalIseGiris] = useState("");
   const [localIstenCikis, setLocalIstenCikis] = useState("");
   const [anchorIsWorkDay, setAnchorIsWorkDay] = useState(true);
-  const [motorConsoleLog48, setMotorConsoleLog48] = useState<boolean>(() => readInitialMotorConsoleLog48());
   const dateDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reqIdRef = useRef(0);
 
-  useLayoutEffect(() => {
-    vardiya48DebugUiRef.current = motorConsoleLog48;
-  }, [motorConsoleLog48]);
-
-
-  const { iseGiris, istenCikis, weeklyDays, davaci, taniklar, vardiyaWeekBucketStart, katSayi, mahsuplasmaMiktari } = formValues;
+  const { iseGiris, istenCikis, weeklyDays, davaci, taniklar, katSayi, mahsuplasmaMiktari } = formValues;
   const zamanasimiBaslangic = formValues.zamanasimi?.nihaiBaslangic || null;
 
   const pageTitle = vardiyaMode === "48" ? "48 Saat Çalışma Hesaplama" : "24 Saat Çalışma Hesaplama";
@@ -406,11 +312,11 @@ export default function Vardiya48Page() {
       ? [
           "24/48 (48 saat dinlenmeli) — bilirkişi özeti:",
           "• Günlük 11 saatlik üst sınır; vardiyada fiilen kabul edilen çalışma 14 saat → vardiya başına 3 saat FM.",
-          "• Her 7 günlük blokta (aşağıda seçilen blok başı; boşsa işe giriş / davacı tarihi) vardiya çalışma günü × 3 saat = blok FM;",
-          "  tipik olarak blok başına 2 veya 3 vardiya günü → 6 veya 9 saat. Pazartesi zorunlu değildir.",
+          "• Her 7 günlük blokta vardiya çalışma günü × 3 saat = blok FM;",
+          "  Blok başlangıcı: işe giriş (vardiya fazı ile aynı çizgi). Pazartesi zorunlu değildir.",
+          "  Tipik olarak blok başına 2 veya 3 vardiya günü → 6 veya 9 saat.",
           `• 24/48 vardiya fazı işe girişe göre; ilk gün: ${anchorIsWorkDay ? "çalıştı" : "dinlendi"}.`,
           "• Üç günlük vardiya ritmi: bir vardiya çalışma günü, ardından iki tam dinlence günü (24/24’teki 1 dolu / 1 boşa karşılık 1 dolu / 2 boş).",
-          "• UBGT / yıllık izin vb. dışlamalarda düşüm tabloda yalnızca 2 vardiya günü satırından gösterilir ((3→2) ve (2→1)); çalışma gününe denk gelmeyen dışlama ayrı satır üretmez.",
         ].join("\n")
       : [
           "24/24 Hesap Motoru (izole):",
@@ -468,7 +374,6 @@ export default function Vardiya48Page() {
           ...(inner.iseGiris != null && { iseGiris: inner.iseGiris }),
           ...(inner.istenCikis != null && { istenCikis: inner.istenCikis }),
           ...(inner.weeklyDays != null && { weeklyDays: String(inner.weeklyDays) }),
-          ...(inner.vardiyaWeekBucketStart != null && { vardiyaWeekBucketStart: String(inner.vardiyaWeekBucketStart) }),
           ...(inner.davaci && { davaci: { ...p.davaci, ...inner.davaci } }),
           ...(Array.isArray(inner.taniklar) && inner.taniklar.length > 0 && { taniklar: inner.taniklar }),
           ...(inner.katSayi != null && { katSayi: inner.katSayi }),
@@ -609,123 +514,38 @@ export default function Vardiya48Page() {
 
       const witnessIntervals48 = buildWitnessSegments(dStart, dEnd, taniklar);
       const zNorm48 = zamanasimiBaslangic ? normalizeDateInput(zamanasimiBaslangic) : null;
-      const weekBucketAnchor48 = (() => {
-        const wbs = normalizeDateInput(vardiyaWeekBucketStart || "");
-        const firstExcl = (exclusions || [])
-          .map((ex) => normalizeDateInput((ex as { start?: string }).start || ""))
-          .filter((d) => d.length >= 10)
-          .sort((a, b) => a.localeCompare(b))[0];
-        const di = normalizeDateInput(davaci?.dateIn || "");
-        if (wbs.length >= 10) return wbs.slice(0, 10);
-        if (firstExcl && firstExcl.length >= 10) return firstExcl.slice(0, 10);
-        if (di.length >= 10) return di.slice(0, 10);
-        return dStart;
-      })();
-
-      if (vardiya48DebugEffective()) {
-        logVardiya48Debug("48.branch.enter", {
-          path: typeof window !== "undefined" ? window.location.pathname : "",
-          vardiyaMode,
-        });
-        logVardiya48Debug("48.afterBuildWitness", {
-          dStart,
-          dEnd,
-          zNorm48,
-          anchorIsWorkDay,
-          intervalCount: witnessIntervals48.length,
-          exclusionCount: exclusions?.length ?? 0,
-          taniklar: taniklar.map((t, i) => ({
-            i,
-            dateIn: t.dateIn,
-            dateOut: t.dateOut,
-          })),
-        });
-        logVardiya48Debug("48.witnessSegments.raw", witnessIntervals48);
-        logDebugLines48(
-          "48.witnessSegments.lines",
-          witnessIntervals48.length > 0
-            ? witnessIntervals48.map((s) => `start=${s.start} end=${s.end}`)
-            : ["(boş) tanık yok veya davacı dönemiyle kesişen aralık yok — motor çağrılmayacak"]
-        );
-      }
+      // 7 günlük özet kovası işe girişle aynı hizada olmalı (generateWorkDays48 anchorStartDate = dStart).
+      const weekBucketAnchor48 = dStart;
 
       if (witnessIntervals48.length === 0) {
-        if (vardiya48DebugEffective()) {
-          logVardiya48Debug("48.abort", "witnessIntervals48 boş; cetvel satırları üretilmedi.");
-        }
         setRows((prev) => prev.filter((r) => r.isManual));
         return;
       }
 
-      const dbg48 = vardiya48DebugEffective();
       // 24 saat ile aynı: buildWitnessSegments çıktısındaki her parça ayrı motor çağrısı (tanık kesişimi / sınır satırları korunur).
-      const summaryRows48 = witnessIntervals48.flatMap((seg, segIdx) => {
+      const summaryRows48 = witnessIntervals48.flatMap((seg) => {
         const segAnchor = anchorForSegment(dStart, seg.start, anchorIsWorkDay);
         const input48 = {
           witnessSegments: [{ start: seg.start, end: seg.end }] as const,
           anchorStartDate: dStart,
           weekBucketAnchorDate: weekBucketAnchor48,
           anchorIsWorkDay: segAnchor,
-          exclusions: exclusions as ExcludedDay[],
+          exclusions: exclusionsFor48 as ExcludedDay[],
           zNorm: zNorm48,
           davaStart: seg.start,
           davaEnd: seg.end,
         };
-        if (dbg48) {
-          const { rows, debug } = calculate48SystemWithDebug(input48);
-          logVardiya48Debug(`48.seg[${segIdx}].motorInput`, {
-            ...input48,
-            witnessSegments: [...input48.witnessSegments],
-            segAnchor,
-          });
-          logVardiya48Debug(`48.seg[${segIdx}].motorCounts`, {
-            mergedWorkDayCount: debug.mergedWorkDayCount,
-            dedupedWorkDayCount: debug.dedupedWorkDayCount,
-            baselineWeekBuckets: debug.baselineWeeks.length,
-            weeksAfterBuckets: debug.weeksAfter.length,
-            exclusionHitCount: debug.exclusionHits.length,
-          });
-          logDebugLines48(
-            `48.seg[${segIdx}].clippedSegments`,
-            debug.clippedSegments.map((c) => `${c.start} → ${c.end}`)
-          );
-          if (debug.exclusionHits.length > 0) {
-            logDebugLines48(
-              `48.seg[${segIdx}].exclusionHits`,
-              debug.exclusionHits.map(
-                (h, i) =>
-                  `[${i}] ${h.weekStart} gün=${h.beforeWorkDays}→${h.afterWorkDays} FMh=${h.beforeFmHours}→${h.afterFmHours} ${h.note || "-"} excl=${(h.matchedExclusions || []).join(",") || "-"}`
-              )
-            );
-          } else {
-            logVardiya48Debug(`48.seg[${segIdx}].exclusionHits`, "0 isabet (dışlama yok)");
-          }
-          logDebugLines48(
-            `48.seg[${segIdx}].stages`,
-            (debug.stages || []).map((s) => `${s.label}: ${s.rows?.length ?? 0} satır`)
-          );
-          logVardiya48Debug(`48.seg[${segIdx}].rows.compact`, summarizeMotorRows48(rows));
-          logDebugLines48(`48.seg[${segIdx}].rows.lines`, formatMotorRowsForLog(rows));
-          return rows;
-        }
         return calculate48System(input48);
       });
-      if (vardiya48DebugEffective()) {
-        logVardiya48Debug("48.summaryRows48.flattened.compact", summarizeMotorRows48(summaryRows48));
-        logDebugLines48("48.summaryRows48.flattened.lines", formatMotorRowsForLog(summaryRows48));
-        const vis = summaryRows48.filter((w) => (Number(w.weekCount) || 0) > 0 && (Number(w.weeklyFmHours) || 0) > 0);
-        logVardiya48Debug("48.pipeline.summary", {
-          tanikParcalari: witnessIntervals48.length,
-          motorSatirSayisi: summaryRows48.length,
-          cetveleGidenSatir: vis.length,
-          ipucu:
-            "Üstteki satırların hepsi aynı dosya satırından (logVardiya48Debug) gelir; konsolda grubu genişlet veya filtreyi [Vardiya48][DEBUG] yap.",
-        });
-      }
       setRows((prev) => {
         const prevApi = prev.filter((r) => !r.isManual);
         const manualRows = prev.filter((r) => r.isManual);
-        const visibleRows48 = summaryRows48.filter((w) => (Number(w.weekCount) || 0) > 0 && (Number(w.weeklyFmHours) || 0) > 0);
+        const visibleRows48 = summaryRows48.filter((w) => {
+          if ((Number(w.weekCount) || 0) <= 0) return false;
+          const wt = Number(w.weekType) || 0;
+          const fm = Number(w.weeklyFmHours) || 0;
+          return !(wt === 0 && fm === 0);
+        });
         const apiRowsRaw: VardiyaRow[] = visibleRows48.map((w, idx) => {
           const row: VardiyaRow = {
             id: prevApi[idx]?.id ?? genVardiyaRowId(),
@@ -747,11 +567,60 @@ export default function Vardiya48Page() {
           const { fm, net } = recalcVardiyaRow(row, "48");
           return { ...row, fm, net };
         });
-        const apiRows = apiRowsRaw.map((r) => ({ ...r, weeks: Math.max(0, Math.round(Number(r.weeks) || 0)) }));
-        if (vardiya48DebugEffective()) {
-          logVardiya48Debug("48.apiRows.final.compact", summarizeUiRows48(apiRows));
-          logDebugLines48("48.apiRows.final.lines", formatUiRowsForLog48(apiRows));
-        }
+        let apiRows = rebalanceSingletonWeekRows(apiRowsRaw, "48");
+        let nextRows = apiRows.map((r) => ({ ...r, weeks: Math.max(0, Math.round(Number(r.weeks) || 0)) }));
+        const byPeriod = new Map<string, number[]>();
+        nextRows.forEach((r, idx) => {
+          const key = `${(r.startISO || "").slice(0, 10)}|${(r.endISO || "").slice(0, 10)}`;
+          const arr = byPeriod.get(key) || [];
+          arr.push(idx);
+          byPeriod.set(key, arr);
+        });
+        byPeriod.forEach((idxs, key) => {
+          const [ps, pe] = key.split("|");
+          if (!ps || !pe) return;
+          const transitionRowsInWindow = nextRows.filter((r) => {
+            const note = String(r.yillikIzinAciklama || "");
+            if (!isV48TransitionMotorNote(note)) return false;
+            const rs = (r.startISO || "").slice(0, 10);
+            const re = (r.endISO || "").slice(0, 10);
+            return rs >= ps && re <= pe;
+          });
+          if (transitionRowsInWindow.length > 0) return;
+          const expectedRoundedWeeks = Math.max(0, Math.round(calculateWeeksBetweenDates(ps, pe)));
+          const currentWeeks = idxs.reduce((acc, i) => acc + Math.max(0, Math.round(Number(nextRows[i].weeks) || 0)), 0);
+          let deltaWeeks = expectedRoundedWeeks - currentWeeks;
+          if (deltaWeeks === 0) return;
+          // Dışlama sonrası motor toplam haftayı düşürmüşse, takvim hedefine tamamlama dışlamayı geri alırdı.
+          if (exclusionsFor48.length > 0 && deltaWeeks > 0) return;
+          while (deltaWeeks > 0) {
+            let targetIdx = idxs[0];
+            for (let k = 1; k < idxs.length; k += 1) {
+              const i = idxs[k];
+              const w = Number(nextRows[i].weeks) || 0;
+              const t = Number(nextRows[targetIdx].weeks) || 0;
+              if (w < t) targetIdx = i;
+            }
+            nextRows[targetIdx] = { ...nextRows[targetIdx], weeks: (Number(nextRows[targetIdx].weeks) || 0) + 1 };
+            deltaWeeks -= 1;
+          }
+          while (deltaWeeks < 0) {
+            let targetIdx = -1;
+            for (let k = 0; k < idxs.length; k += 1) {
+              const i = idxs[k];
+              const w = Number(nextRows[i].weeks) || 0;
+              if (w <= 0) continue;
+              if (targetIdx < 0 || w > (Number(nextRows[targetIdx].weeks) || 0)) targetIdx = i;
+            }
+            if (targetIdx < 0) break;
+            nextRows[targetIdx] = { ...nextRows[targetIdx], weeks: Math.max(0, (Number(nextRows[targetIdx].weeks) || 0) - 1) };
+            deltaWeeks += 1;
+          }
+        });
+        apiRows = nextRows.map((r) => {
+          const { fm, net } = recalcVardiyaRow(r, "48");
+          return { ...r, fm, net };
+        });
         return [...apiRows, ...manualRows];
       });
     } catch (e) {
@@ -768,11 +637,10 @@ export default function Vardiya48Page() {
     taniklar,
     anchorIsWorkDay,
     exclusions,
+    exclusionsFor48,
     katSayi,
     zamanasimiBaslangic,
     vardiyaMode,
-    motorConsoleLog48,
-    vardiyaWeekBucketStart,
     davaci?.dateIn,
   ]);
 
@@ -1066,35 +934,6 @@ export default function Vardiya48Page() {
               </select>
             </div>
 
-            {vardiyaMode === "48" ? (
-              <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/35 px-3 py-2.5">
-                <label className="flex items-start gap-2.5 text-xs cursor-pointer text-indigo-900 dark:text-indigo-100 leading-snug">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                    checked={motorConsoleLog48}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setMotorConsoleLog48(v);
-                      try {
-                        if (v) window.sessionStorage.setItem("aktuerya:vardiya48:debug", "1");
-                        else window.sessionStorage.removeItem("aktuerya:vardiya48:debug");
-                      } catch {
-                        /* ignore */
-                      }
-                    }}
-                  />
-                  <span>
-                    <span className="font-semibold">48 motor / tanık konsol logu</span>
-                    {" — "}
-                    İşaretleyince hesap yeniden çalışır; konsolda <code className="text-[10px] px-0.5 rounded bg-white/80 dark:bg-black/30">[Vardiya48][DEBUG]</code> satırlarını arayın.
-                    Konsol filtresinde <strong className="font-medium">Info</strong> seviyesinin kapalı olmadığından emin olun (Chrome’da <code className="text-[10px]">console.log</code> sık sık
-                    “Verbose”da kalır; biz <code className="text-[10px]">console.info</code> kullanıyoruz).
-                  </span>
-                </label>
-              </div>
-            ) : null}
-
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 p-4 sm:p-5 bg-gray-50/50 dark:bg-gray-900/30 shadow-sm">
               <h2 className={sectionTitleCls}>Dava dönemi</h2>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-2">
@@ -1135,25 +974,6 @@ export default function Vardiya48Page() {
                     <option value="rest">İlk gün dinlendi</option>
                   </select>
                 </div>
-                {vardiyaMode === "48" ? (
-                  <div className="col-span-2 sm:col-span-3">
-                    <label className={labelCls}>7 günlük blok başı (ücret özeti kovası)</label>
-                    <input
-                      type="date"
-                      value={vardiyaWeekBucketStart ? normalizeDateInput(vardiyaWeekBucketStart).slice(0, 10) : ""}
-                      onChange={(e) =>
-                        setFormValues((p) => ({
-                          ...p,
-                          vardiyaWeekBucketStart: e.target.value ? e.target.value.slice(0, 10) : "",
-                        }))
-                      }
-                      className={inputCls}
-                    />
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
-                      Boşsa önce davacı ilk tarih, o da yoksa işe giriş kullanılır. İşaretlediğiniz gün 7 günlük özetin 1. günüdür; Pazartesi şartı yoktur.
-                    </p>
-                  </div>
-                ) : null}
               </div>
             </section>
 
@@ -1244,20 +1064,24 @@ export default function Vardiya48Page() {
               </div>
             </section>
 
-            <div className="space-y-3">
-              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
-              <UbgtFmDayPicker
-                rangeStart={ubgtFmCatalogRange.start}
-                rangeEnd={ubgtFmCatalogRange.end}
-                exclusions={exclusions}
-                setExclusions={setExclusions}
-                showToastError={showToastError}
-              />
-            </div>
+            {vardiyaMode === "24" ? (
+              <div className="space-y-3">
+                <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+                <UbgtFmDayPicker
+                  rangeStart={ubgtFmCatalogRange.start}
+                  rangeEnd={ubgtFmCatalogRange.end}
+                  exclusions={exclusions}
+                  setExclusions={setExclusions}
+                  showToastError={showToastError}
+                />
+              </div>
+            ) : null}
 
-            <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
-              Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
-            </p>
+            {vardiyaMode === "24" ? (
+              <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
+                Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+              </p>
+            ) : null}
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">

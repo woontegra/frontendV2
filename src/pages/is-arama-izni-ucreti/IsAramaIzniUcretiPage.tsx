@@ -12,7 +12,6 @@ import { useKaydetContext } from "@/core/kaydet/KaydetProvider";
 import { usePageStyle } from "@/hooks/usePageStyle";
 import { apiClient } from "@/utils/apiClient";
 import KidemTazminatiForm from "@/pages/kidem-tazminati/KidemTazminatiForm";
-import EklentiModal from "@/pages/kidem-tazminati/EklentiModal";
 import type { ExtraItem } from "@/pages/kidem-tazminati/contract";
 import { ReportContentFromConfig } from "@/components/report";
 import type { ReportConfig } from "@/components/report";
@@ -40,9 +39,11 @@ const NOTE_ITEMS: string[] = [
   "",
   "Madde 27-",
   "",
-  "• Bildirim süreleri içinde işveren, işçiye yeni bir iş bulması için gerekli olan iş arama iznini iş saatleri içinde ve ücret kesintisi yapmadan vermeye mecburdur.",
+  "• Bildirim süreleri içinde işveren, işçiye yeni bir iş bulması için gerekli olan iş arama iznini iş saatleri içinde ve ücret kesintisi yapmadan vermeye mecburdur. İş arama izninin süresi günde iki saatten az olamaz ve işçi isterse iş arama izin saatlerini birleştirerek toplu kullanabilir. Ancak iş arama iznini toplu kullanmak isteyen işçi, bunu işten ayrılacağı günden evvelki günlere rastlatmak ve bu durumu işverene bildirmek zorundadır.",
   "",
   "• İşveren yeni iş arama iznini vermez veya eksik kullandırırsa o süreye ilişkin ücret işçiye ödenir.",
+  "",
+  "• İşveren, iş arama izni esnasında işçiyi çalıştırır ise işçinin izin kullanarak bir çalışma karşılığı olmaksızın alacağı ücrete ilaveten, çalıştırdığı sürenin ücretini yüzde yüz zamlı öder.",
 ];
 
 const sectionTitleCls = "text-sm font-semibold text-gray-800 dark:text-gray-200";
@@ -125,7 +126,7 @@ export default function IsAramaIzniUcretiPage() {
   const [searchParams] = useSearchParams();
   const effectiveId = id || searchParams.get("caseId") || undefined;
   const pageStyle = usePageStyle();
-  const { success, error: showToastError, info } = useToast();
+  const { success, error: showToastError } = useToast();
   const { kaydetAc, isSaving } = useKaydetContext();
   const videoLink = getVideoLink("is-arama-izni");
 
@@ -150,12 +151,6 @@ export default function IsAramaIzniUcretiPage() {
 
   const [kullandirilanIzinGun, setKullandirilanIzinGun] = useState("");
   const [tarihAralikDusumler, setTarihAralikDusumler] = useState<TarihAralikDusum[]>([]);
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalTitle, setModalTitle] = useState("Eklenti Hesaplama");
-  const [activeField, setActiveField] = useState<string | null>(null);
-  const [eklentiValues, setEklentiValues] = useState<Record<string, string[]>>({});
-  const [applyFn, setApplyFn] = useState<(v: number) => void>(() => () => {});
 
   const selectedYear = useMemo(() => {
     const dateStr = exitDate || liveForm?.istenCikis || "";
@@ -309,16 +304,16 @@ export default function IsAramaIzniUcretiPage() {
         const isten = endDateValue ? new Date(endDateValue).toISOString().split("T")[0] : "";
         const brutVal = String(formRaw.brutUcret ?? formRaw.brut ?? "");
 
+        /* Sayfa çıplak brüt ile çalışır; kayıtta prim vb. kalsa bile giydirme uygulanmaz */
         const nextForm: LiveFormShape = {
-          ...formRaw,
           iseGiris: ise,
           istenCikis: isten,
           brut: brutVal || (formRaw.brut as string) || "",
-          prim: (formRaw.prim as string) || "",
-          ikramiye: (formRaw.ikramiye as string) || "",
-          yol: (formRaw.yol as string) || "",
-          yemek: (formRaw.yemek as string) || "",
-          extras: (formRaw.extras as ExtraItem[]) || [],
+          prim: "",
+          ikramiye: "",
+          yol: "",
+          yemek: "",
+          extras: [],
         };
 
         setLoadedForm(nextForm);
@@ -676,6 +671,7 @@ export default function IsAramaIzniUcretiPage() {
                 key={effectiveId ?? "new"}
                 embedInCard
                 showIhbarShortcut={false}
+                showExtraCalculationsSection={false}
                 customTitle={`${PAGE_HEADING.toUpperCase()} HESAPLAMA`}
                 onTotalsChange={setTotals}
                 onExitDateChange={setExitDate}
@@ -684,29 +680,16 @@ export default function IsAramaIzniUcretiPage() {
                     iseGiris: v.iseGiris,
                     istenCikis: v.istenCikis,
                     brut: v.brut,
-                    prim: v.prim,
-                    ikramiye: v.ikramiye,
-                    yol: v.yol,
-                    yemek: v.yemek,
-                    extras: v.extras,
+                    prim: "",
+                    ikramiye: "",
+                    yol: "",
+                    yemek: "",
+                    extras: [],
                   })
                 }
-                onRequestEklenti={(fieldKey, title, apply) => {
-                  setActiveField(fieldKey);
-                  setModalTitle(title || "Eklenti Hesaplama");
-                  setApplyFn(() => (val: number) => {
-                    apply(val);
-                  });
-                  setModalOpen(true);
-                }}
                 initialBrut={loadedForm?.brut}
                 initialIseGiris={initialIse}
                 initialIstenCikis={initialIsten}
-                initialPrim={loadedForm?.prim}
-                initialIkramiye={loadedForm?.ikramiye}
-                initialYol={loadedForm?.yol}
-                initialYemek={loadedForm?.yemek}
-                initialExtras={loadedForm?.extras}
               />
 
               <div>
@@ -958,27 +941,6 @@ export default function IsAramaIzniUcretiPage() {
           </div>
         </div>
       </div>
-
-      <EklentiModal
-        open={modalOpen}
-        title={modalTitle}
-        months={activeField ? eklentiValues[activeField] : undefined}
-        onClose={() => setModalOpen(false)}
-        onMonthsChange={(i, val) => {
-          if (!activeField) return;
-          setEklentiValues((prev) => {
-            const arr = prev[activeField] ?? Array(12).fill("");
-            const next = arr.slice();
-            next[i] = val;
-            return { ...prev, [activeField]: next };
-          });
-        }}
-        onApply={(v) => {
-          applyFn(v);
-          setModalOpen(false);
-          info("Eklenti hesaplandı", "Seçili kaleme uygulandı");
-        }}
-      />
 
       <div style={{ display: "none" }} aria-hidden="true">
         <div

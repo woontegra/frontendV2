@@ -31,8 +31,8 @@ import { DAMGA_VERGISI_ORANI } from "@/utils/fazlaMesai/tableDisplayPipeline";
 import { calculateIncomeTaxWithBrackets } from "@/utils/incomeTaxCore";
 import { calculate24System } from "../../../utils/fazlaMesai/vardiya24/calculate24System";
 import { calculate48System } from "../../../utils/fazlaMesai/vardiya24/calculate48System";
+import { isV48TransitionMotorNote } from "../../../utils/fazlaMesai/vardiya24/vardiya48TransitionNotes";
 import { buildMergedWitnessSegments } from "@/modules/fazla-mesai/shared/utils/witnessOvertimeSegments";
-import { reallocateVardiya48UbgtDonorFromTwoDayColumn } from "./reallocateVardiya48UbgtDonorRows";
 
 const RECORD_24 = "fazla_mesai_vardiya_24";
 const RECORD_48 = "fazla_mesai_vardiya_48";
@@ -533,6 +533,17 @@ export default function Vardiya24_48Page() {
     updateWitness,
   } = useTanikliStandartState();
 
+  const exclusionsFor48 = useMemo(
+    () =>
+      Array.isArray(exclusions)
+        ? (exclusions as ExcludedDay[]).filter((e) => {
+            const t = String(e.type || "").trim();
+            return t !== "UBGT" && t !== "Yıllık İzin";
+          })
+        : [],
+    [exclusions]
+  );
+
   const forcedMode = useMemo<"24" | "48" | null>(() => forcedModeFromPath(location.pathname), [location.pathname]);
   const [vardiyaMode, setVardiyaMode] = useState<"24" | "48">(() => forcedModeFromPath(window.location.pathname) || readStoredVardiyaMode());
   const [rows, setRows] = useState<VardiyaRow[]>([]);
@@ -571,7 +582,6 @@ export default function Vardiya24_48Page() {
           "  tipik olarak blok başına 2 veya 3 vardiya günü → 6 veya 9 saat.",
           `• 24/48 vardiya fazı işe girişe göre; ilk gün: ${anchorIsWorkDay ? "çalıştı" : "dinlendi"}.`,
           "• Üç günlük vardiya ritmi: bir vardiya çalışma günü, ardından iki tam dinlence günü (24/24’teki 1 dolu / 1 boşa karşılık 1 dolu / 2 boş).",
-          "• UBGT / yıllık izin vb. dışlamalarda düşüm tabloda yalnızca 2 vardiya günü satırından gösterilir ((3→2) ve (2→1)).",
         ].join("\n")
       : [
           "24/24 Hesap Motoru (izole):",
@@ -895,8 +905,9 @@ export default function Vardiya24_48Page() {
         return calculate48System({
           witnessSegments: [{ start: seg.start, end: seg.end }],
           anchorStartDate: dStart,
+          weekBucketAnchorDate: dStart,
           anchorIsWorkDay: segAnchor,
-          exclusions: exclusions as ExcludedDay[],
+          exclusions: exclusionsFor48 as ExcludedDay[],
           zNorm: zNorm48,
           davaStart: seg.start,
           davaEnd: seg.end,
@@ -908,7 +919,12 @@ export default function Vardiya24_48Page() {
       setRows((prev) => {
         const prevApi = prev.filter((r) => !r.isManual);
         const manualRows = prev.filter((r) => r.isManual);
-        const visibleRows48 = summaryRows48.filter((w) => (Number(w.weekCount) || 0) > 0 && (Number(w.weeklyFmHours) || 0) > 0);
+        const visibleRows48 = summaryRows48.filter((w) => {
+          if ((Number(w.weekCount) || 0) <= 0) return false;
+          const wt = Number(w.weekType) || 0;
+          const fm = Number(w.weeklyFmHours) || 0;
+          return !(wt === 0 && fm === 0);
+        });
         const apiRowsRaw: VardiyaRow[] = visibleRows48.map((w, idx) => {
           const row: VardiyaRow = {
             id: prevApi[idx]?.id ?? genVardiyaRowId(),
@@ -931,7 +947,6 @@ export default function Vardiya24_48Page() {
           return { ...row, fm, net };
         });
         let apiRows = rebalanceSingletonWeekRows(apiRowsRaw, "48");
-        apiRows = reallocateVardiya48UbgtDonorFromTwoDayColumn(apiRows);
         let nextRows = apiRows.map((r) => ({ ...r, weeks: Math.max(0, Math.round(Number(r.weeks) || 0)) }));
         const byPeriod = new Map<string, number[]>();
         nextRows.forEach((r, idx) => {
@@ -947,7 +962,7 @@ export default function Vardiya24_48Page() {
 
           const transitionRowsInWindow = nextRows.filter((r) => {
             const note = String(r.yillikIzinAciklama || "");
-            if (!/\((\d+)\s*->\s*(\d+)\s*gün\)/i.test(note)) return false;
+            if (!isV48TransitionMotorNote(note)) return false;
             const rs = (r.startISO || "").slice(0, 10);
             const re = (r.endISO || "").slice(0, 10);
             return rs >= ps && re <= pe;
@@ -958,6 +973,7 @@ export default function Vardiya24_48Page() {
           const currentWeeks = idxs.reduce((acc, i) => acc + Math.max(0, Math.round(Number(nextRows[i].weeks) || 0)), 0);
           let deltaWeeks = expectedRoundedWeeks - currentWeeks;
           if (deltaWeeks === 0) return;
+          if (exclusionsFor48.length > 0 && deltaWeeks > 0) return;
 
           while (deltaWeeks > 0) {
             let targetIdx = idxs[0];
@@ -1002,7 +1018,7 @@ export default function Vardiya24_48Page() {
     } finally {
       if (rid === reqIdRef.current) setIsCalculating(false);
     }
-  }, [iseGiris, istenCikis, taniklar, anchorIsWorkDay, exclusions, katSayi, zamanasimiBaslangic, vardiyaMode]);
+  }, [iseGiris, istenCikis, taniklar, anchorIsWorkDay, exclusions, exclusionsFor48, katSayi, zamanasimiBaslangic, vardiyaMode]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -1434,20 +1450,24 @@ export default function Vardiya24_48Page() {
               </div>
             </section>
 
-            <div className="space-y-3">
-              <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
-              <UbgtFmDayPicker
-                rangeStart={ubgtFmCatalogRange.start}
-                rangeEnd={ubgtFmCatalogRange.end}
-                exclusions={exclusions}
-                setExclusions={setExclusions}
-                showToastError={showToastError}
-              />
-            </div>
+            {vardiyaMode === "24" ? (
+              <div className="space-y-3">
+                <YillikIzinPanel exclusions={exclusions} setExclusions={setExclusions} success={success} showToastError={showToastError} />
+                <UbgtFmDayPicker
+                  rangeStart={ubgtFmCatalogRange.start}
+                  rangeEnd={ubgtFmCatalogRange.end}
+                  exclusions={exclusions}
+                  setExclusions={setExclusions}
+                  showToastError={showToastError}
+                />
+              </div>
+            ) : null}
 
-            <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
-              Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
-            </p>
+            {vardiyaMode === "24" ? (
+              <p className="text-[11px] sm:text-xs text-red-600 dark:text-red-400 leading-relaxed">
+                Son haftaya isabet eden izin/UBGT düşümlerinde, tabloda görülen tarih aralığı 7 günden kısa olsa dahi hesaplama bu süre üzerinden yapılmaz. İlgili düşüm, üst satırdaki toplam haftadan 1 hafta eksiltilerek ayrı bir satırda 1 hafta olarak dikkate alınmıştır.
+              </p>
+            ) : null}
 
             <section className="rounded-xl border border-gray-200 dark:border-gray-600 overflow-hidden bg-white dark:bg-gray-800">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/80">

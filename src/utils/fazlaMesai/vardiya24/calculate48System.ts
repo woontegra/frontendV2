@@ -1,9 +1,15 @@
 import type { ExcludedDay } from "@/shared/utils/exclusionStorage";
-import { countAnnualLeaveCalendarDaysInWindow } from "@/shared/utils/fazlaMesai/annualLeaveCalendarDays";
 import type { WorkDay } from "./generateWorkDays48";
 import { dedupeWorkDaysByDate, generateWorkDays48 } from "./generateWorkDays48";
-import { applyExclusions48, buildEffectiveUbgtDates } from "./applyExclusions48";
+import {
+  applyExclusions48,
+  buildEffectiveExclusionEvents48,
+  buildEffectiveMergedUir48,
+  groupEffectiveExclusionEventsByAnchorBucket,
+  listV48AppliedDropIsoOrdered,
+} from "./applyExclusions48";
 import { getAnchorWeekBucketKey, groupWeeks48, type Weekly48Row } from "./groupWeeks48";
+import { format48RowExclusionCaption, isV48TransitionMotorNote } from "./vardiya48TransitionNotes";
 
 export type PeriodSummary48Row = {
   startDate: string;
@@ -93,17 +99,66 @@ function dateMin(a: Date, b: Date): Date {
   return a < b ? a : b;
 }
 
-/** Verilen takvim penceresinde hangi dışlama türleri varsa ona göre cetvel notu. */
+function normDayIso(d: string): string {
+  return String(d || "").trim().slice(0, 10);
+}
+
+function countV48WorkDays(days: WorkDay[]): number {
+  return days.reduce((n, d) => n + (d.isWork ? 1 : 0), 0);
+}
+
+function buildBaselineWorkByIso(workBaseline: WorkDay[]): Map<string, boolean> {
+  return new Map(workBaseline.map((d) => [normDayIso(d.date), !!d.isWork]));
+}
+
+/** Verilen takvim penceresinde fiilen düşüm üreten (48 ritim + vardiya çalışma günü) dışlamalara göre cetvel notu. */
 function exclusionNoteForClippedWindow(
   winStart: Date,
   winEnd: Date,
-  exclusions: ExcludedDay[] | null | undefined
+  exclusions: ExcludedDay[] | null | undefined,
+  workByIso: Map<string, boolean>
 ): string {
   if (!exclusions?.length || winStart > winEnd) return "";
 
-  const nIzin = countAnnualLeaveCalendarDaysInWindow(winStart, winEnd, exclusions, null, ["Yıllık İzin"]);
-  const nUbgt = countAnnualLeaveCalendarDaysInWindow(winStart, winEnd, exclusions, null, ["UBGT"]);
-  const nOther = countAnnualLeaveCalendarDaysInWindow(winStart, winEnd, exclusions, null, ["Rapor", "Diğer", "Puantaj/Bordro"]);
+  const ws = toISODate(winStart);
+  const we = toISODate(winEnd);
+  const eff = buildEffectiveMergedUir48(exclusions);
+
+  let nIzin = 0;
+  let nUbgt = 0;
+  let nOther = 0;
+
+  exclusions.forEach((ex) => {
+    const type = String(ex.type || "").trim();
+    const s = parseISODateLocal(String(ex.start || ""));
+    const e = parseISODateLocal(String(ex.end || ""));
+    if (!s || !e || e < s) return;
+    const capRaw = Number(ex.days);
+    const cap = Number.isFinite(capRaw) && capRaw > 0 ? Math.floor(capRaw) : null;
+    const cur = new Date(s);
+    let used = 0;
+    while (cur <= e) {
+      if (cap != null && used >= cap) break;
+      const key = toISODate(cur);
+      if (key < ws || key > we) {
+        used += 1;
+        cur.setDate(cur.getDate() + 1);
+        continue;
+      }
+      const work = workByIso.get(key) === true;
+      if (type === "UBGT") {
+        if (eff.has(key) && work) nUbgt += 1;
+      } else if (type === "Yıllık İzin") {
+        if (eff.has(key) && work) nIzin += 1;
+      } else if (type === "Rapor" || type === "Diğer") {
+        if (eff.has(key) && work) nOther += 1;
+      } else if (type === "Puantaj/Bordro") {
+        if (work) nOther += 1;
+      }
+      used += 1;
+      cur.setDate(cur.getDate() + 1);
+    }
+  });
 
   const hasI = nIzin > 0;
   const hasU = nUbgt > 0;
@@ -129,7 +184,8 @@ function exclusionNoteForIsoWeek(
   weekStartMondayISO: string,
   globalStart: string,
   globalEnd: string,
-  exclusions: ExcludedDay[] | null | undefined
+  exclusions: ExcludedDay[] | null | undefined,
+  workByIso: Map<string, boolean>
 ): string {
   const mon = parseISODateLocal(weekStartMondayISO);
   const gs = parseISODateLocal(globalStart);
@@ -139,7 +195,7 @@ function exclusionNoteForIsoWeek(
   const sun = addDaysLocal(mon, 6);
   const winStart = dateMax(mon, gs);
   const winEnd = dateMin(sun, ge);
-  return exclusionNoteForClippedWindow(winStart, winEnd, exclusions);
+  return exclusionNoteForClippedWindow(winStart, winEnd, exclusions, workByIso);
 }
 
 function matchedExclusionsForIsoWeek(
@@ -252,7 +308,32 @@ function roundedWeeksBetween(startIso: string, endIso: string): number {
   return Math.max(0, Math.round(days / 7));
 }
 
-function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummary48Row[] {
+/** Dışlama takvimi ücret dönemi satırı [ps,pe] ile kesişiyorsa (takvim günü, ISO). */
+function anyExclusionIntersectsClosedPeriod(
+  exclusions: ExcludedDay[] | null | undefined,
+  ps: string,
+  pe: string
+): boolean {
+  if (!exclusions?.length) return false;
+  const periodStart = String(ps || "").slice(0, 10);
+  const periodEnd = String(pe || "").slice(0, 10);
+  if (!periodStart || !periodEnd) return false;
+  for (const ex of exclusions) {
+    const s = parseISODateLocal(String(ex.start || ""));
+    const e = parseISODateLocal(String(ex.end || ""));
+    if (!s || !e || e < s) continue;
+    const es = toISODate(s);
+    const ee = toISODate(e);
+    if (ee < periodStart || es > periodEnd) continue;
+    return true;
+  }
+  return false;
+}
+
+function normalize48PeriodDistribution(
+  rows: PeriodSummary48Row[],
+  exclusions?: ExcludedDay[] | null
+): PeriodSummary48Row[] {
   if (!rows.length) return rows;
   const out = rows.map((r) => ({ ...r }));
   const byPeriod = new Map<string, number[]>();
@@ -263,20 +344,18 @@ function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummar
     byPeriod.set(key, arr);
   });
 
-  const trRe = /\((\d+)\s*->\s*(\d+)\s*gün\)/i;
-
   byPeriod.forEach((idxs, key) => {
     const [ps, pe] = key.split("|");
     if (!ps || !pe) return;
 
     const transitionWeeks = out.reduce((acc, r) => {
       const note = String(r.note || "");
-      if (!trRe.test(note)) return acc;
+      if (!isV48TransitionMotorNote(note)) return acc;
       const rs = String(r.startDate || "").slice(0, 10);
       const re = String(r.endDate || "").slice(0, 10);
       if (!rs || !re) return acc;
-      // Geçiş satırları ayrı 7 günlük anahtarda gelebilir; dönem içinde kalanları toplamdan düş.
-      if (rs < ps || re > pe) return acc;
+      // Ücret dönemi [ps,pe] ile kesişen geçiş satırı (kısa pencere); tam içerme şartı değil.
+      if (re < ps || rs > pe) return acc;
       return acc + Math.max(0, Math.round(Number(r.weekCount) || 0));
     }, 0);
 
@@ -287,8 +366,22 @@ function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummar
     const totalRounded = Math.max(0, roundedWeeksBetween(ps, pe));
     const idx3 = notelessIdxs.find((i) => Number(out[i].weekType) === 3) ?? -1;
     const idx2 = notelessIdxs.find((i) => Number(out[i].weekType) === 2) ?? -1;
+    const otherNoteless = notelessIdxs.filter((i) => i !== idx3 && i !== idx2);
+
+    // 24/48 ritiminde ara dönemlerde 1 (veya 0) vardiya günü haftaları da çıkar; bunlar 2/3 dağılımına
+    // sokulmamalı — aksi halde notsuz "fazla" satırlar weekCount=0 yapılıp satır düşer (tanık kesişimi bozulur).
+    if (otherNoteless.length > 0) {
+      return;
+    }
+
+    const notelessWeekSum = (): number =>
+      notelessIdxs.reduce((acc, i) => acc + Math.max(0, Math.round(Number(out[i].weekCount) || 0)), 0);
 
     if (idx3 >= 0 && idx2 >= 0) {
+      // Motor zaten haftayı düşürmüşse (notsuz toplam < takvim), takvim 21/21 ile geri şişirme.
+      if (anyExclusionIntersectsClosedPeriod(exclusions, ps, pe) && notelessWeekSum() < expected) {
+        return;
+      }
       // Sabit kural: baz dağılımı (drop yokmuş gibi) kur, düşümü önce 2 gün satırından yap.
       let base3 = Math.ceil(totalRounded / 2);
       let base2 = Math.floor(totalRounded / 2);
@@ -332,6 +425,9 @@ function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummar
     }
 
     if (idx3 >= 0) {
+      if (anyExclusionIntersectsClosedPeriod(exclusions, ps, pe) && notelessWeekSum() < expected) {
+        return;
+      }
       out[idx3].weekCount = expected;
       notelessIdxs.forEach((i) => {
         if (i !== idx3) out[i].weekCount = 0;
@@ -340,6 +436,9 @@ function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummar
     }
 
     if (idx2 >= 0) {
+      if (anyExclusionIntersectsClosedPeriod(exclusions, ps, pe) && notelessWeekSum() < expected) {
+        return;
+      }
       out[idx2].weekCount = expected;
       notelessIdxs.forEach((i) => {
         if (i !== idx2) out[i].weekCount = 0;
@@ -347,7 +446,7 @@ function normalize48PeriodDistribution(rows: PeriodSummary48Row[]): PeriodSummar
     }
   });
 
-  return out.filter((r) => (Number(r.weekCount) || 0) > 0);
+  return out.filter(isVisible48PeriodSummaryRow);
 }
 
 function summarizeByWagePeriod(
@@ -396,13 +495,6 @@ function buildWeekMap(weeks: Weekly48Row[]): Map<string, Weekly48Row> {
   return m;
 }
 
-function inclusiveCalendarSpanDays(minISO: string, maxISO: string): number {
-  const a = parseISODateLocal(minISO.slice(0, 10));
-  const b = parseISODateLocal(maxISO.slice(0, 10));
-  if (!a || !b) return 1;
-  return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
-}
-
 function countWorkDaysBetween(workDays: WorkDay[], startISO: string, endISO: string): number {
   const s = startISO.slice(0, 10);
   const e = endISO.slice(0, 10);
@@ -414,150 +506,321 @@ function countWorkDaysBetween(workDays: WorkDay[], startISO: string, endISO: str
   return n;
 }
 
-function clusterConsecutiveSortedDates(sorted: string[]): string[][] {
-  if (!sorted.length) return [];
-  const out: string[][] = [];
-  let cur: string[] = [sorted[0].slice(0, 10)];
-  for (let i = 1; i < sorted.length; i += 1) {
-    const prev = parseISODateLocal(sorted[i - 1].slice(0, 10));
-    const nextD = parseISODateLocal(sorted[i].slice(0, 10));
-    if (!prev || !nextD) continue;
-    const nextCal = addDaysLocal(prev, 1);
-    if (toISODate(nextCal) === sorted[i].slice(0, 10)) cur.push(sorted[i].slice(0, 10));
-    else {
-      out.push(cur);
-      cur = [sorted[i].slice(0, 10)];
-    }
-  }
-  out.push(cur);
-  return out;
+/** Hafta sayısı yoksa veya anlamsız boş satır (0 vardiya günü + 0 FM; geçişte weekCount=1 ile sızmaması için). */
+function isVisible48PeriodSummaryRow(r: PeriodSummary48Row): boolean {
+  if ((Number(r.weekCount) || 0) <= 0) return false;
+  const wd = Number(r.weekType) || 0;
+  const fm = Number(r.weeklyFmHours) || 0;
+  if (wd === 0 && fm === 0) return false;
+  return true;
 }
 
-function collectEffectiveExclusionAnchorDates(
-  exclusions: ExcludedDay[] | null | undefined,
-  workBaseline: WorkDay[]
-): string[] {
-  if (!exclusions?.length) return [];
-  const out = new Set<string>();
-  const effectiveUbgt = buildEffectiveUbgtDates(exclusions);
-  const workdaySet = new Set(workBaseline.map((d) => String(d.date || "").slice(0, 10)).filter(Boolean));
-  for (const ex of exclusions) {
+
+function expandExclusionCalendarDatesForTrace(exclusions: ExcludedDay[] | null | undefined): string[] {
+  const raw = new Set<string>();
+  exclusions?.forEach((ex) => {
     const type = String(ex.type || "").trim();
-    if (!["UBGT", "Yıllık İzin", "Rapor", "Diğer"].includes(type)) continue;
+    if (!["UBGT", "Yıllık İzin", "Rapor", "Diğer", "Puantaj/Bordro"].includes(type)) return;
     const s = parseISODateLocal(String(ex.start || ""));
     const e = parseISODateLocal(String(ex.end || ""));
-    if (!s || !e || e < s) continue;
+    if (!s || !e || e < s) return;
     const capRaw = Number(ex.days);
     const cap = Number.isFinite(capRaw) && capRaw > 0 ? Math.floor(capRaw) : null;
     const cur = new Date(s);
     let used = 0;
     while (cur <= e) {
       if (cap != null && used >= cap) break;
-      const key = toISODate(cur);
-      if (!workdaySet.has(key)) {
-        cur.setDate(cur.getDate() + 1);
-        continue;
-      }
-      if (type === "UBGT") {
-        if (effectiveUbgt.has(key)) out.add(key);
-      } else {
-        out.add(key);
-      }
+      raw.add(toISODate(cur));
       used += 1;
       cur.setDate(cur.getDate() + 1);
     }
+  });
+  return [...raw].sort((a, b) => a.localeCompare(b));
+}
+
+/** 48 birleşik ritimde ardışık etkin düşümler (1-0-0) aynı zincirde en fazla 3 takvim günü arayla gelir. */
+const V48_MERGED_DROP_STREAK_MAX_GAP_DAYS = 3;
+
+function clusterV48MergedRhythmAppliedDropStreaks(appliedSorted: string[]): string[][] {
+  const sorted = [...new Set(appliedSorted.map((d) => d.slice(0, 10)))].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (!sorted.length) return [];
+  const clusters: string[][] = [];
+  let cur: string[] = [sorted[0]];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const p = parseISODateLocal(sorted[i - 1]);
+    const c = parseISODateLocal(sorted[i]);
+    if (!p || !c) {
+      cur.push(sorted[i]);
+      continue;
+    }
+    const diffDays = Math.round((c.getTime() - p.getTime()) / 86400000);
+    if (diffDays <= V48_MERGED_DROP_STREAK_MAX_GAP_DAYS) cur.push(sorted[i]);
+    else {
+      clusters.push(cur);
+      cur = [sorted[i]];
+    }
   }
-  return [...out].sort((a, b) => a.localeCompare(b));
+  clusters.push(cur);
+  return clusters;
 }
 
-function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
-  const a1 = startA.slice(0, 10);
-  const a2 = endA.slice(0, 10);
-  const b1 = startB.slice(0, 10);
-  const b2 = endB.slice(0, 10);
-  if (!a1 || !a2 || !b1 || !b2) return false;
-  return a1 <= b2 && b1 <= a2;
+/** Motor `changedWeekStarts` kovası ile geçiş penceresi [rs,re] kesişir mi (ISO gün)? */
+function countChangedWeekBucketsOverlappingRange(
+  changedWeekStarts: Set<string> | undefined,
+  rowStart: string,
+  rowEnd: string
+): number {
+  if (!changedWeekStarts?.size) return 0;
+  const rs = rowStart.slice(0, 10);
+  const re = rowEnd.slice(0, 10);
+  let n = 0;
+  changedWeekStarts.forEach((wk) => {
+    const key = wk.slice(0, 10);
+    const wkD = parseISODateLocal(key);
+    if (!wkD) return;
+    const wkEnd = toISODate(addDaysLocal(wkD, 6));
+    if (wkEnd < rs || key > re) return;
+    n += 1;
+  });
+  return n;
 }
 
-function mergeUbgtChangedRowsIntoSevenDayEnvelope(
-  changedRows: PeriodSummary48Row[],
+/**
+ * Bilirkişi “geçiş haftası” sayısı — **tek kural**: baseline≠sonrası olan 7 günlük kova (anchor)
+ * sayısı; streak penceresi ile kesişen `changedWeekStarts` girdisi.
+ * Aynı kovada birden çok fiilî düşüm olsa bile **1 hafta**; `cluster.length` / etkin ISO adedi burada kullanılmaz.
+ */
+function v48DonorWeekCountForStreakWindow(
+  changedWeekStarts: Set<string>,
+  rowStart: string,
+  rowEnd: string,
+  hasAppliedDropsInCluster: boolean
+): number {
+  const fromBuckets = countChangedWeekBucketsOverlappingRange(changedWeekStarts, rowStart, rowEnd);
+  if (fromBuckets > 0) return fromBuckets;
+  return hasAppliedDropsInCluster ? 1 : 0;
+}
+
+type V48StreakMotorBuild = {
+  rows: PeriodSummary48Row[];
+  /** Aggregate motor satırlarını elemek için; `afterC<=0` olsa da doldurulur (görünmez satır yine filtrelenir). */
+  overlapWindows: Array<{ start: string; end: string }>;
+};
+
+/**
+ * Birleşik ritim: fiilî düşüm ISO’larını 1-0-0 zincirine göre kümeleyip tek geçiş penceresi (ilk düşümden 7 gün).
+ * Hafta donörü sayısı yalnızca `v48DonorWeekCountForStreakWindow` ile (kovası değişen hafta), ritimdeki düşüm adedi ile karıştırılmaz.
+ */
+function buildV48MotorTransitionRowsFromMergedRhythmRawStreaks(
   exclusions: ExcludedDay[] | null | undefined,
+  workBaseline: WorkDay[],
+  workAfter: WorkDay[],
   globalStart: string,
   globalEnd: string,
-  anchorStart: string,
-  workBaseline: WorkDay[],
-  workAfter: WorkDay[]
-): PeriodSummary48Row[] {
-  if (!exclusions?.length) return changedRows;
+  workByIso: Map<string, boolean>,
+  changedWeekStarts: Set<string>
+): V48StreakMotorBuild {
+  if (!exclusions?.length) return { rows: [], overlapWindows: [] };
+  const appliedDrops = listV48AppliedDropIsoOrdered(exclusions, workBaseline);
+  if (!appliedDrops.length) return { rows: [], overlapWindows: [] };
 
-  const transitionRe = /\(\d+\s*->\s*\d+\s*gün\)/i;
-  // Not metni her zaman "UBGT" içermeyebiliyor; geçiş satırlarını esas al.
-  const ubgtRows = changedRows.filter((r) => transitionRe.test(String(r.note || "")));
-  if (!ubgtRows.length) return changedRows;
+  const clusters = clusterV48MergedRhythmAppliedDropStreaks(appliedDrops);
+  const gsD = parseISODateLocal(globalStart.slice(0, 10));
+  const geD = parseISODateLocal(globalEnd.slice(0, 10));
+  if (!gsD || !geD) return { rows: [], overlapWindows: [] };
 
-  const effective = collectEffectiveExclusionAnchorDates(exclusions, workBaseline);
-  if (!effective.length) return changedRows;
+  const out: PeriodSummary48Row[] = [];
+  const overlapWindows: Array<{ start: string; end: string }> = [];
+  for (const cluster of clusters) {
+    if (!cluster.length) continue;
+    const blockMin = cluster[0];
+    const dropsInBlock = cluster;
 
-  const clusters = clusterConsecutiveSortedDates(effective);
-  const otherChanged = changedRows.filter((r) => !transitionRe.test(String(r.note || "")));
-  const consumed = new Set<PeriodSummary48Row>();
-  const mergedUbgt: PeriodSummary48Row[] = [];
+    const blockFirstD = parseISODateLocal(blockMin);
+    if (!blockFirstD) continue;
+    const segStartD = dateMax(gsD, blockFirstD);
+    const segEndD = dateMin(geD, addDaysLocal(segStartD, 6));
+    if (segStartD > segEndD) continue;
 
-  for (const C of clusters) {
-    const bucketKeys = new Set<string>();
-    for (const d of C) {
-      const k = getAnchorWeekBucketKey(d, anchorStart);
-      if (k) bucketKeys.add(k);
+    const rowStart = toISODate(segStartD);
+    const rowEnd = toISODate(segEndD);
+    overlapWindows.push({ start: rowStart, end: rowEnd });
+
+    const beforeC = countWorkDaysBetween(workBaseline, rowStart, rowEnd);
+    const afterC = countWorkDaysBetween(workAfter, rowStart, rowEnd);
+    const weekCountVal = v48DonorWeekCountForStreakWindow(changedWeekStarts, rowStart, rowEnd, cluster.length > 0);
+
+    if (afterC <= 0) {
+      continue;
     }
-    if (!bucketKeys.size) continue;
 
-    const clusterMin = C[0].slice(0, 10);
-    const clusterMax = C[C.length - 1].slice(0, 10);
-    const span = inclusiveCalendarSpanDays(clusterMin, clusterMax);
-    const minD = parseISODateLocal(clusterMin);
-    if (!minD) continue;
-    let envEnd = toISODate(addDaysLocal(minD, Math.max(6, span - 1)));
-    const ge = parseISODateLocal(globalEnd.slice(0, 10));
-    const envEndD = parseISODateLocal(envEnd);
-    if (ge && envEndD && envEndD > ge) envEnd = globalEnd.slice(0, 10);
+    const winNote =
+      segStartD <= segEndD ? exclusionNoteForClippedWindow(segStartD, segEndD, exclusions, workByIso) : "";
 
-    const rowsIn = ubgtRows.filter((r) => {
-      if (consumed.has(r)) return false;
-      const ks = getAnchorWeekBucketKey(r.startDate.slice(0, 10), anchorStart);
-      const ke = getAnchorWeekBucketKey(r.endDate.slice(0, 10), anchorStart);
-      if (ks && bucketKeys.has(ks)) return true;
-      if (ke && bucketKeys.has(ke)) return true;
-      // Seçilen gün blok başlangıcıdır: kova kayması olsa bile blokla çakışan satırları birleştir.
-      if (rangesOverlap(r.startDate, r.endDate, clusterMin, envEnd)) return true;
-      return false;
-    });
+    let noteOut = "";
+    if (dropsInBlock.length > 1 || beforeC - afterC > 1) {
+      noteOut = `Dışlama uygulanmıştır (${beforeC}->${afterC} gün)`;
+    } else {
+      noteOut = format48RowExclusionCaption(winNote, beforeC, afterC);
+    }
 
-    if (!rowsIn.length) continue;
-    rowsIn.forEach((r) => consumed.add(r));
-
-    const beforeC = countWorkDaysBetween(workBaseline, clusterMin, envEnd);
-    const afterC = countWorkDaysBetween(workAfter, clusterMin, envEnd);
-    const gs = parseISODateLocal(globalStart.slice(0, 10));
-    const winStart = gs && minD ? dateMax(minD, gs) : minD;
-    const winEnd = ge && envEndD ? dateMin(envEndD, ge) : envEndD;
-    let note =
-      winStart && winEnd ? exclusionNoteForClippedWindow(winStart, winEnd, exclusions) : "";
-    if (!note.trim()) note = "(UBGT düşümü uygulanmıştır)";
-
-    mergedUbgt.push({
-      startDate: clusterMin,
-      endDate: envEnd,
-      weekType: String(afterC),
-      beforeWeekType: String(beforeC),
-      weekCount: 1,
-      weeklyFmHours: afterC * 3,
-      note: `${note} (${beforeC}->${afterC} gün)`,
+    out.push({
+      startDate: rowStart,
+      endDate: rowEnd,
+      weekType: String(Math.max(0, afterC)),
+      beforeWeekType: String(Math.max(0, beforeC)),
+      weekCount: Math.max(1, weekCountVal),
+      weeklyFmHours: Math.max(0, afterC) * 3,
+      note: noteOut,
     });
   }
 
-  const leftoverUbgt = ubgtRows.filter((r) => !consumed.has(r));
-  const allUbgt = [...mergedUbgt, ...leftoverUbgt].sort((a, b) => a.startDate.localeCompare(b.startDate));
-  return [...otherChanged, ...allUbgt];
+  out.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  overlapWindows.sort((a, b) => a.start.localeCompare(b.start));
+  return { rows: out, overlapWindows };
+}
+
+function mergeMotorRowsByAnchorBucket(
+  motor: PeriodSummary48Row[],
+  anchor: string,
+  workBaseline: WorkDay[],
+  workAfter: WorkDay[],
+  globalStart: string,
+  globalEnd: string,
+  exclusions: ExcludedDay[] | null | undefined,
+  workByIso: Map<string, boolean>
+): PeriodSummary48Row[] {
+  const groups = new Map<string, PeriodSummary48Row[]>();
+  for (const r of motor) {
+    const d = String(r.startDate || "").slice(0, 10);
+    const bk = getAnchorWeekBucketKey(d, anchor) || d;
+    const arr = groups.get(bk) || [];
+    arr.push(r);
+    groups.set(bk, arr);
+  }
+
+  const mergedMotor: PeriodSummary48Row[] = [];
+  const sortedBucketKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+  for (const bk of sortedBucketKeys) {
+    const arr = groups.get(bk)!;
+
+    const bStart = bk.slice(0, 10);
+    const bStartD = parseISODateLocal(bStart);
+    if (!bStartD) {
+      mergedMotor.push(...arr);
+      continue;
+    }
+    const bEnd = toISODate(addDaysLocal(bStartD, 6));
+    const gsD = parseISODateLocal(globalStart.slice(0, 10));
+    const geD = parseISODateLocal(globalEnd.slice(0, 10));
+    const bEndD = parseISODateLocal(bEnd);
+    if (!bEndD) {
+      mergedMotor.push(...arr);
+      continue;
+    }
+    const rowStartD = gsD ? dateMax(bStartD, gsD) : bStartD;
+    const rowEndD = geD ? dateMin(bEndD, geD) : bEndD;
+    const rowStart = toISODate(rowStartD);
+    const rowEnd = toISODate(rowEndD);
+    const beforeC = countWorkDaysBetween(workBaseline, bStart, bEnd);
+    const afterC = countWorkDaysBetween(workAfter, bStart, bEnd);
+
+    const winNote =
+      rowStartD <= rowEndD ? exclusionNoteForClippedWindow(rowStartD, rowEndD, exclusions, workByIso) : "";
+
+    let noteOut = "";
+    if (arr.length > 1 || beforeC - afterC > 1) {
+      noteOut = `Dışlama uygulanmıştır (${beforeC}->${afterC} gün)`;
+    } else {
+      noteOut = format48RowExclusionCaption(winNote, beforeC, afterC);
+    }
+
+    if (afterC > 0) {
+      mergedMotor.push({
+        startDate: rowStart,
+        endDate: rowEnd,
+        weekType: String(Math.max(0, afterC)),
+        beforeWeekType: String(Math.max(0, beforeC)),
+        weekCount: 1,
+        weeklyFmHours: Math.max(0, afterC) * 3,
+        note: noteOut,
+      });
+    }
+  }
+
+  return mergedMotor;
+}
+
+/** Puantaj vb. için kova birleştirme; birleşik ritim blokları `buildV48MotorTransitionRowsFromMergedRhythmRawStreaks` ile üretilir. */
+function consolidateV48MotorTransitionRowsByAnchorBucket(
+  changedRows: PeriodSummary48Row[],
+  anchorBucketStart: string,
+  workBaseline: WorkDay[],
+  workAfter: WorkDay[],
+  globalStart: string,
+  globalEnd: string,
+  exclusions: ExcludedDay[] | null | undefined,
+  workByIso: Map<string, boolean>,
+  changedWeekStarts: Set<string>
+): PeriodSummary48Row[] {
+  const anchor = String(anchorBucketStart || "").trim().slice(0, 10);
+  if (!anchor) return changedRows;
+
+  const motor: PeriodSummary48Row[] = [];
+  const other: PeriodSummary48Row[] = [];
+  for (const r of changedRows) {
+    if (isV48TransitionMotorNote(String(r.note || ""))) motor.push(r);
+    else other.push(r);
+  }
+  if (motor.length === 0) return changedRows;
+
+  const { rows: streakMotor, overlapWindows: streakOverlapWindows } = buildV48MotorTransitionRowsFromMergedRhythmRawStreaks(
+    exclusions,
+    workBaseline,
+    workAfter,
+    globalStart,
+    globalEnd,
+    workByIso,
+    changedWeekStarts
+  );
+
+  const sortMerged = (rows: PeriodSummary48Row[]) =>
+    rows.sort((a, b) => {
+      if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+      return Number(b.weekType || 0) - Number(a.weekType || 0);
+    });
+
+  if (streakMotor.length === 0 && streakOverlapWindows.length === 0) {
+    return [...other, ...mergeMotorRowsByAnchorBucket(motor, anchor, workBaseline, workAfter, globalStart, globalEnd, exclusions, workByIso)].sort(
+      (a, b) => {
+        if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+        return Number(b.weekType || 0) - Number(a.weekType || 0);
+      }
+    );
+  }
+
+  const overlapsStreakWindow = (r: PeriodSummary48Row) =>
+    streakOverlapWindows.some((w) => {
+      const a = r.startDate.slice(0, 10);
+      const b = r.endDate.slice(0, 10);
+      const ws = w.start.slice(0, 10);
+      const we = w.end.slice(0, 10);
+      return !(b < ws || a > we);
+    });
+
+  const motorKept = motor.filter((row) => !overlapsStreakWindow(row));
+  const mergedKept = mergeMotorRowsByAnchorBucket(
+    motorKept,
+    anchor,
+    workBaseline,
+    workAfter,
+    globalStart,
+    globalEnd,
+    exclusions,
+    workByIso
+  );
+
+  return sortMerged([...other, ...streakMotor, ...mergedKept]);
 }
 
 export type AggregateWeeklyBucketsMergeOpts = {
@@ -574,12 +837,28 @@ function aggregateWeeklyBucketsToPeriodRows(
   weeksAfter: Weekly48Row[],
   globalStart: string,
   globalEnd: string,
-  exclusions: ExcludedDay[] | null | undefined
+  exclusions: ExcludedDay[] | null | undefined,
+  workBaseline: WorkDay[],
+  workAfterDays: WorkDay[],
+  anchorBucketStart: string
 ): {
   rows: PeriodSummary48Row[];
   exclusionHits: Calculate48AggregationDebugInfo["exclusionHits"];
   stages: Calculate48DebugStage[];
+  v48ExclusionTrace: NonNullable<Calculate48SystemDebugInfo["v48ExclusionTrace"]>;
 } {
+  const anchorB = String(anchorBucketStart || "").trim().slice(0, 10);
+  const workByIso = buildBaselineWorkByIso(workBaseline);
+  const effectiveRhythmEvents = buildEffectiveExclusionEvents48(exclusions || []);
+  const appliedDropIsosOrdered = listV48AppliedDropIsoOrdered(exclusions || [], workBaseline);
+  const selectedExclusionCalendarDates = expandExclusionCalendarDatesForTrace(exclusions);
+  const effectiveEventsByBucket: Record<string, string[]> = {};
+  if (anchorB) {
+    groupEffectiveExclusionEventsByAnchorBucket(effectiveRhythmEvents, anchorB).forEach((arr, k) => {
+      effectiveEventsByBucket[k] = arr.map((e) => e.date);
+    });
+  }
+
   const baselineMap = buildWeekMap(baselineWeeks);
   const afterMap = buildWeekMap(weeksAfter);
   const changedWeekStarts = new Set<string>();
@@ -600,8 +879,9 @@ function aggregateWeeklyBucketsToPeriodRows(
     const rowEnd = matchedEnd > globalEnd ? globalEnd : matchedEnd;
     if (!afterWeek) {
       changedWeekStarts.add(key);
-      const note = exclusionNoteForIsoWeek(key, globalStart, globalEnd, exclusions);
+      const note = exclusionNoteForIsoWeek(key, globalStart, globalEnd, exclusions, workByIso);
       const beforeType = String(beforeWeek.workDayCount);
+      const rowNote0 = format48RowExclusionCaption(note, beforeWeek.workDayCount, 0);
       changedRows.push({
         startDate: rowStart,
         endDate: rowEnd,
@@ -609,7 +889,7 @@ function aggregateWeeklyBucketsToPeriodRows(
         beforeWeekType: beforeType,
         weekCount: 1,
         weeklyFmHours: 0,
-        note: `${note} (${beforeType}->0 gün)`,
+        note: rowNote0,
       });
       exclusionHits.push({
         weekStart: key,
@@ -624,8 +904,9 @@ function aggregateWeeklyBucketsToPeriodRows(
     }
     if (beforeWeek.workDayCount !== afterWeek.workDayCount) {
       changedWeekStarts.add(key);
-      const note = exclusionNoteForIsoWeek(key, globalStart, globalEnd, exclusions);
+      const note = exclusionNoteForIsoWeek(key, globalStart, globalEnd, exclusions, workByIso);
       const beforeType = String(beforeWeek.workDayCount);
+      const rowNote = format48RowExclusionCaption(note, beforeWeek.workDayCount, afterWeek.workDayCount);
       changedRows.push({
         startDate: rowStart,
         endDate: rowEnd,
@@ -633,7 +914,7 @@ function aggregateWeeklyBucketsToPeriodRows(
         beforeWeekType: beforeType,
         weekCount: 1,
         weeklyFmHours: afterWeek.workDayCount * 3,
-        note: `${note} (${beforeType}->${afterWeek.workDayCount} gün)`,
+        note: rowNote,
       });
       exclusionHits.push({
         weekStart: key,
@@ -647,14 +928,60 @@ function aggregateWeeklyBucketsToPeriodRows(
     }
   });
 
+  const changedRowsConsolidated = consolidateV48MotorTransitionRowsByAnchorBucket(
+    changedRows,
+    anchorB,
+    workBaseline,
+    workAfterDays,
+    globalStart,
+    globalEnd,
+    exclusions,
+    workByIso,
+    changedWeekStarts
+  );
+
+  const dropsByBk = new Map<string, number>();
+  if (anchorB) {
+    appliedDropIsosOrdered.forEach((iso) => {
+      const bk = getAnchorWeekBucketKey(iso, anchorB) || iso;
+      dropsByBk.set(bk, (dropsByBk.get(bk) || 0) + 1);
+    });
+  }
+  const bucketDiagnostics = [...dropsByBk.keys()]
+    .sort((a, b) => a.localeCompare(b))
+    .map((bk) => {
+      const bStartD = parseISODateLocal(bk.slice(0, 10));
+      const bEnd = bStartD ? toISODate(addDaysLocal(bStartD, 6)) : bk;
+      const beforeWorkDays = countWorkDaysBetween(workBaseline, bk, bEnd);
+      const afterWorkDays = countWorkDaysBetween(workAfterDays, bk, bEnd);
+      return {
+        bucketKey: bk,
+        bucketRange: `${bk.slice(0, 10)}–${bEnd}`,
+        beforeWorkDays,
+        appliedDropCount: dropsByBk.get(bk) || 0,
+        afterWorkDays,
+      };
+    });
+
   const summaryRows = summarizeByWagePeriod(weeksAfter, globalStart, globalEnd, changedWeekStarts);
-  const mergedRows = [...summaryRows, ...changedRows].filter((r) => (Number(r.weekCount) || 0) > 0);
-  const normalizedRows = normalize48PeriodDistribution(mergedRows);
+  const mergedRows = [...summaryRows, ...changedRowsConsolidated].filter(isVisible48PeriodSummaryRow);
+  const normalizedRows = normalize48PeriodDistribution(mergedRows, exclusions);
   const sortedRows = normalizedRows.sort((a, b) =>
     a.startDate === b.startDate
       ? Number(b.weekType) - Number(a.weekType)
       : a.startDate.localeCompare(b.startDate)
   );
+  const v48ExclusionTrace: NonNullable<Calculate48SystemDebugInfo["v48ExclusionTrace"]> = {
+    anchorBucketStart: anchorB,
+    selectedExclusionCalendarDates,
+    effectiveRhythmEvents,
+    effectiveEventsByBucket,
+    appliedDropIsosOrdered,
+    bucketDiagnostics,
+    transitionRowsAfterConsolidate: changedRowsConsolidated.filter((r) =>
+      isV48TransitionMotorNote(String(r.note || ""))
+    ),
+  };
 
   return {
     rows: sortedRows,
@@ -662,10 +989,12 @@ function aggregateWeeklyBucketsToPeriodRows(
     stages: [
       { label: "summaryRows", rows: summaryRows },
       { label: "changedRows", rows: changedRows },
+      { label: "changedRowsConsolidated", rows: changedRowsConsolidated },
       { label: "summaryPlusChanged", rows: mergedRows },
       { label: "normalizedRows", rows: normalizedRows },
       { label: "finalRows", rows: sortedRows },
     ],
+    v48ExclusionTrace,
   };
 }
 
@@ -719,7 +1048,7 @@ function enforcePeriodWeekCaps(rows: PeriodSummary48Row[], startDate: string, en
     }
   });
 
-  return out.filter((r) => (Number(r.weekCount) || 0) > 0);
+  return out.filter(isVisible48PeriodSummaryRow);
 }
 
 /**
@@ -818,7 +1147,7 @@ function enforceWitnessSplitPolicy(rows: PeriodSummary48Row[], startDate: string
     for (let k = 2; k < sorted.length; k += 1) out[sorted[k]].weekCount = 0;
   });
 
-  return out.filter((r) => (Number(r.weekCount) || 0) > 0);
+  return out.filter(isVisible48PeriodSummaryRow);
 }
 
 export type Calculate48SystemInput = {
@@ -827,7 +1156,7 @@ export type Calculate48SystemInput = {
   anchorStartDate: string;
   anchorIsWorkDay: boolean;
   /**
-   * 7 günlük özet kovası / bilanço haftası başlangıcı (işaretlenen gün = kova günü 1).
+   * 7 günlük özet kovası başlangıcı; vardiya fazı (`anchorStartDate`) ile aynı olmalıdır.
    * Verilmezse `anchorStartDate` kullanılır. Pazartesi zorunlu değildir.
    */
   weekBucketAnchorDate?: string | null;
@@ -858,6 +1187,22 @@ export type Calculate48SystemDebugInfo = {
   weeksAfter: ReturnType<typeof groupWeeks48>;
   exclusionHits: Calculate48AggregationDebugInfo["exclusionHits"];
   stages: Calculate48DebugStage[];
+  /** Dışlama ritmi / kova grupları (konsol log için). */
+  v48ExclusionTrace?: {
+    anchorBucketStart: string;
+    selectedExclusionCalendarDates: string[];
+    effectiveRhythmEvents: ReturnType<typeof buildEffectiveExclusionEvents48>;
+    effectiveEventsByBucket: Record<string, string[]>;
+    appliedDropIsosOrdered: string[];
+    bucketDiagnostics: Array<{
+      bucketKey: string;
+      bucketRange: string;
+      beforeWorkDays: number;
+      appliedDropCount: number;
+      afterWorkDays: number;
+    }>;
+    transitionRowsAfterConsolidate: PeriodSummary48Row[];
+  };
 };
 
 function clipSegmentZamana48(
@@ -905,13 +1250,17 @@ export function calculate48SystemWithDebug(input: Calculate48SystemInput): {
   const afterExcl = applyExclusions48(deduped, input.exclusions, weekBucket);
   const weeksAfter = groupWeeks48(afterExcl, periodOpts);
 
-  const { rows, exclusionHits, stages } = aggregateWeeklyBucketsToPeriodRows(
+  const { rows, exclusionHits, stages, v48ExclusionTrace } = aggregateWeeklyBucketsToPeriodRows(
     baselineWeeks,
     weeksAfter,
     input.davaStart,
     input.davaEnd,
-    input.exclusions
+    input.exclusions,
+    deduped,
+    afterExcl,
+    weekBucket
   );
+
   return {
     rows,
     debug: {
@@ -932,6 +1281,7 @@ export function calculate48SystemWithDebug(input: Calculate48SystemInput): {
       weeksAfter,
       exclusionHits,
       stages,
+      v48ExclusionTrace,
     },
   };
 }

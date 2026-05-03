@@ -1229,7 +1229,13 @@ export default function BakiyeUcretAlacagiPage() {
                   </p>
                 ) : monthRows.length > 0 ? (
                   <div className="mt-1 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-600">
-                    <table className="min-w-full text-xs border-collapse text-gray-900 dark:text-gray-100">
+                    <table className="w-full min-w-[20rem] text-xs border-collapse text-gray-900 dark:text-gray-100 table-fixed">
+                      <colgroup>
+                        <col className="w-[38%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[26%]" />
+                        <col className="w-[22%]" />
+                      </colgroup>
                       <thead>
                         <tr className="text-left text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50">
                           <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold">
@@ -1238,10 +1244,10 @@ export default function BakiyeUcretAlacagiPage() {
                           <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold">
                             Gün
                           </th>
-                          <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold">
+                          <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold text-right">
                             Brüt
                           </th>
-                          <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold">
+                          <th className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 font-semibold text-right">
                             Net
                           </th>
                         </tr>
@@ -1249,22 +1255,23 @@ export default function BakiyeUcretAlacagiPage() {
                       <tbody>
                         {monthRows.map((mr, i) => (
                           <tr key={i} className="bg-white dark:bg-gray-800/30">
-                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600">
+                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 align-middle">
                               {toDisplayDate(mr.start)} – {toDisplayDate(mr.end)}
                             </td>
-                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600">
+                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 align-middle">
                               {mr.days} gün
                             </td>
-                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600">
+                            <td className="py-1.5 px-1.5 sm:px-2 border border-gray-200 dark:border-gray-600 align-middle">
                               <Input
+                                variant="compact"
                                 type="text"
                                 value={editingGross[i] ?? fmtCurrency(mr.gross)}
                                 onChange={(e) => setEditingGross((prev) => ({ ...prev, [i]: e.target.value }))}
                                 onBlur={() => void handleMonthRowGrossBlur(i)}
-                                className="h-8 w-24 text-xs"
+                                className="w-full min-w-0 text-right tabular-nums"
                               />
                             </td>
-                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600">
+                            <td className="py-1.5 px-2 border border-gray-200 dark:border-gray-600 text-right tabular-nums align-middle">
                               {fmtCurrency(mr.net)} ₺
                             </td>
                           </tr>
