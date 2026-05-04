@@ -104,28 +104,32 @@ export function Toaster() {
             className={`
               relative overflow-hidden rounded-xl shadow-lg backdrop-blur-sm
               animate-in slide-in-from-right-5 fade-in duration-300
-              ${t.variant === "success" 
-                ? "bg-white/95 dark:bg-gray-800/95 border-l-4 border-green-500" 
-                : t.variant === "error" 
-                ? "bg-white/95 dark:bg-gray-800/95 border-l-4 border-red-500" 
+              ${t.variant === "success"
+                ? "bg-white/95 dark:bg-gray-800/95 border-l-4 border-green-500"
+                : t.variant === "error"
+                ? "bg-white/95 dark:bg-gray-800/95 border-l-4 border-red-500"
                 : "bg-white/95 dark:bg-gray-800/95 border-l-4 border-blue-500"
               }
             `}
           >
             {/* Gradient accent bar */}
-            <div className={`absolute top-0 left-0 right-0 h-1 ${
-              t.variant === "success" 
-                ? "bg-gradient-to-r from-emerald-400 to-teal-500" 
-                : t.variant === "error" 
-                ? "bg-gradient-to-r from-red-400 to-rose-500" 
-                : "bg-gradient-to-r from-blue-400 to-cyan-500"
-            }`} />
-            
+            <div
+              className={`absolute top-0 left-0 right-0 h-1 ${
+                t.variant === "success"
+                  ? "bg-gradient-to-r from-emerald-400 to-teal-500"
+                  : t.variant === "error"
+                  ? "bg-gradient-to-r from-red-400 to-rose-500"
+                  : "bg-gradient-to-r from-blue-400 to-cyan-500"
+              }`}
+            />
+
             <div className="p-4 flex items-start gap-3">
               {/* Icon */}
-              <div className={`flex-shrink-0 ${
-                t.variant === "success" ? "text-green-500" : t.variant === "error" ? "text-red-500" : "text-blue-500"
-              }`}>
+              <div
+                className={`flex-shrink-0 ${
+                  t.variant === "success" ? "text-green-500" : t.variant === "error" ? "text-red-500" : "text-blue-500"
+                }`}
+              >
                 {t.variant === "success" ? (
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -140,23 +144,20 @@ export function Toaster() {
                   </svg>
                 )}
               </div>
-              
+
               {/* Content */}
               <div className="flex-1 min-w-0">
                 {t.title && (
-                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {t.title}
-                  </div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t.title}</div>
                 )}
                 {t.description && (
-                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    {t.description}
-                  </div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">{t.description}</div>
                 )}
               </div>
-              
+
               {/* Close button */}
               <button
+                type="button"
                 onClick={() => dismiss(t.id)}
                 className="flex-shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
               >
@@ -165,19 +166,15 @@ export function Toaster() {
                 </svg>
               </button>
             </div>
-            
+
             {/* Progress bar */}
             <div className="absolute bottom-0 left-0 right-0 h-1 bg-gray-200 dark:bg-gray-700">
-              <div 
+              <div
                 className={`h-full ${
-                  t.variant === "success" 
-                    ? "bg-green-500" 
-                    : t.variant === "error" 
-                    ? "bg-red-500" 
-                    : "bg-blue-500"
+                  t.variant === "success" ? "bg-green-500" : t.variant === "error" ? "bg-red-500" : "bg-blue-500"
                 }`}
                 style={{
-                  animation: `shrink ${progressDuration}ms linear forwards`
+                  animation: `shrink ${progressDuration}ms linear forwards`,
                 }}
               />
             </div>

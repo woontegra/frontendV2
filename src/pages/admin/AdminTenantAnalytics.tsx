@@ -1,11 +1,19 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/context/ToastContext";
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { TrendingUp, Users, Calculator, Activity, Download, Calendar, Radio } from "lucide-react";
+import { TrendingUp, Users, Calculator, Activity, Download, Calendar, Radio, Search } from "lucide-react";
 import { apiClient } from "@/utils/apiClient";
 
 interface TenantStat {
@@ -52,6 +60,20 @@ const formatTypeName = (type: string): string => {
   return typeMap[type] || type;
 };
 
+type TenantTableStatusFilter = "all" | "active" | "passive";
+type TenantTableSortFilter = "users" | "calculations" | "activity";
+
+const tenantDistributionSummary = (t: TenantStat): string =>
+  Object.entries(t.typeDistribution)
+    .sort(([, a], [, b]) => b - a)
+    .map(([type, count]) => `${formatTypeName(type)}: ${count}`)
+    .join(" · ");
+
+const sortedTenantDistributionEntries = (t: TenantStat): [string, number][] =>
+  Object.entries(t.typeDistribution).sort(([, a], [, b]) => b - a);
+
+const DISTRIBUTION_PREVIEW_LIMIT = 5;
+
 export default function AdminTenantAnalytics() {
   const { error: showToastError } = useToast();
   const [data, setData] = useState<AnalyticsData | null>(null);
@@ -59,6 +81,11 @@ export default function AdminTenantAnalytics() {
   const [activeUsersCount, setActiveUsersCount] = useState<number | null>(null);
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
   const [topN, setTopN] = useState(10);
+  const [tenantTableSearch, setTenantTableSearch] = useState("");
+  const [tenantStatusFilter, setTenantStatusFilter] = useState<TenantTableStatusFilter>("active");
+  const [tenantSortFilter, setTenantSortFilter] = useState<TenantTableSortFilter>("users");
+  const tenantTableUserAdjustedRef = useRef(false);
+  const [distributionModalTenant, setDistributionModalTenant] = useState<TenantStat | null>(null);
 
   const loadActiveUsersCount = useCallback(async () => {
     try {
@@ -119,11 +146,63 @@ export default function AdminTenantAnalytics() {
     URL.revokeObjectURL(url);
   };
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return "-";
-    try { return new Date(dateStr).toLocaleDateString("tr-TR", { year: "numeric", month: "short", day: "numeric" }); }
-    catch { return dateStr; }
+  const formatDateTime = (dateStr: string | null) => {
+    if (!dateStr) return "—";
+    try {
+      return new Date(dateStr).toLocaleString("tr-TR", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateStr;
+    }
   };
+
+  const markTenantTableAdjusted = () => {
+    tenantTableUserAdjustedRef.current = true;
+  };
+
+  const displayedTenants = useMemo(() => {
+    if (!data?.tenants) return [];
+    let list = [...data.tenants];
+
+    if (tenantStatusFilter === "active") list = list.filter((t) => t.totalCalculations > 0);
+    else if (tenantStatusFilter === "passive") list = list.filter((t) => t.totalCalculations === 0);
+
+    const q = tenantTableSearch.trim().toLocaleLowerCase("tr-TR");
+    if (q) {
+      list = list.filter((t) => {
+        const name = (t.tenantName || "").toLocaleLowerCase("tr-TR");
+        const email = (t.tenantEmail || "").toLocaleLowerCase("tr-TR");
+        const at = email.indexOf("@");
+        const domain = at >= 0 ? email.slice(at + 1) : "";
+        return name.includes(q) || email.includes(q) || domain.includes(q);
+      });
+    }
+
+    if (tenantSortFilter === "users") {
+      list.sort((a, b) => b.userCount - a.userCount);
+    } else if (tenantSortFilter === "calculations") {
+      list.sort((a, b) => b.totalCalculations - a.totalCalculations);
+    } else {
+      list.sort((a, b) => {
+        const ta = a.lastCalculation ? new Date(a.lastCalculation).getTime() : 0;
+        const tb = b.lastCalculation ? new Date(b.lastCalculation).getTime() : 0;
+        return tb - ta;
+      });
+    }
+
+    const defaultFilters =
+      tenantStatusFilter === "active" && tenantSortFilter === "users" && !tenantTableSearch.trim();
+    if (!tenantTableUserAdjustedRef.current && defaultFilters) {
+      list = list.filter((t) => t.totalCalculations > 0).slice(0, 20);
+    }
+
+    return list;
+  }, [data, tenantStatusFilter, tenantSortFilter, tenantTableSearch]);
 
   const pieData = data
     ? Object.entries(data.summary.overallTypeDistribution)
@@ -255,34 +334,203 @@ export default function AdminTenantAnalytics() {
           <CardDescription>Tüm tenant'ların detaylı kullanım bilgileri</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="flex-1 min-w-[min(100%,220px)] space-y-1.5">
+              <label htmlFor="tenant-table-search" className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                Arama
+              </label>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" aria-hidden />
+                <input
+                  id="tenant-table-search"
+                  type="search"
+                  value={tenantTableSearch}
+                  onChange={(e) => {
+                    markTenantTableAdjusted();
+                    setTenantTableSearch(e.target.value);
+                  }}
+                  placeholder="Tenant adı, e-posta veya alan adı…"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm dark:bg-gray-800 dark:text-gray-100"
+                  autoComplete="off"
+                />
+              </div>
+            </div>
+            <div className="w-full sm:w-auto min-w-[min(100%,160px)] space-y-1.5">
+              <label htmlFor="tenant-status-filter" className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                Durum
+              </label>
+              <select
+                id="tenant-status-filter"
+                value={tenantStatusFilter}
+                onChange={(e) => {
+                  markTenantTableAdjusted();
+                  setTenantStatusFilter(e.target.value as TenantTableStatusFilter);
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-gray-100"
+              >
+                <option value="all">Tümü</option>
+                <option value="active">Aktif</option>
+                <option value="passive">Pasif</option>
+              </select>
+            </div>
+            <div className="w-full sm:w-auto min-w-[min(100%,200px)] space-y-1.5">
+              <label htmlFor="tenant-sort-filter" className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                Sıralama
+              </label>
+              <select
+                id="tenant-sort-filter"
+                value={tenantSortFilter}
+                onChange={(e) => {
+                  markTenantTableAdjusted();
+                  setTenantSortFilter(e.target.value as TenantTableSortFilter);
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-gray-100"
+              >
+                <option value="users">En çok kullanıcı</option>
+                <option value="calculations">En çok hesaplama</option>
+                <option value="activity">Son aktivite</option>
+              </select>
+            </div>
+          </div>
+          {!tenantTableUserAdjustedRef.current &&
+            tenantStatusFilter === "active" &&
+            tenantSortFilter === "users" &&
+            !tenantTableSearch.trim() && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                Varsayılan: aktif tenantlar, kullanıcı sayısına göre ilk 20. Pasifleri veya tümünü görmek için durum filtresini değiştirin.
+              </p>
+            )}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Tenant</th>
-                  <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Kullanıcı</th>
-                  <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Hesaplama</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Dağılım</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Son Hesaplama</th>
-                  <th className="text-center py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Durum</th>
+                  <th className="text-left py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Tenant</th>
+                  <th className="text-center py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Kullanıcı</th>
+                  <th className="text-center py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Hesaplama</th>
+                  <th className="text-left py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Dağılım</th>
+                  <th className="text-left py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Son Hesaplama</th>
+                  <th className="text-center py-2 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Durum</th>
                 </tr>
               </thead>
               <tbody>
-                {data.tenants.map((tenant) => (
-                  <tr key={tenant.tenantId} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30">
-                    <td className="py-3 px-4"><p className="font-medium text-gray-900 dark:text-gray-100">{tenant.tenantName}</p>{tenant.tenantEmail && <p className="text-xs text-gray-500 dark:text-gray-400">{tenant.tenantEmail}</p>}</td>
-                    <td className="py-3 px-4 text-center text-gray-900 dark:text-gray-100">{tenant.userCount}</td>
-                    <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-gray-100">{tenant.totalCalculations.toLocaleString("tr-TR")}</td>
-                    <td className="py-3 px-4"><div className="flex flex-wrap gap-1">{tenant.totalCalculations > 0 ? Object.entries(tenant.typeDistribution).sort(([,a],[,b]) => b - a).map(([type, count]) => <Badge key={type} variant="secondary" className="text-xs">{formatTypeName(type)}: {count}</Badge>) : <span className="text-xs text-gray-400">-</span>}</div></td>
-                    <td className="py-3 px-4 text-sm text-gray-600 dark:text-gray-400">{formatDate(tenant.lastCalculation)}</td>
-                    <td className="py-3 px-4 text-center">{tenant.totalCalculations > 0 ? <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">Aktif</Badge> : <Badge variant="secondary">Pasif</Badge>}</td>
-                  </tr>
-                ))}
+                {displayedTenants.map((tenant) => {
+                  const distSummary = tenantDistributionSummary(tenant);
+                  const distEntries = sortedTenantDistributionEntries(tenant);
+                  const sonHesaplamaBaslik = `${formatTypeName(tenant.mostUsedType)} · ${tenant.lastCalculation ? formatDateTime(tenant.lastCalculation) : "—"}`;
+                  const sonHesaplamaTitle = [sonHesaplamaBaslik, distSummary || undefined].filter(Boolean).join("\n");
+                  const previewEntries = distEntries.slice(0, DISTRIBUTION_PREVIEW_LIMIT);
+                  const showDistributionModalCta = distEntries.length > DISTRIBUTION_PREVIEW_LIMIT;
+                  return (
+                    <tr
+                      key={tenant.tenantId}
+                      className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30"
+                    >
+                      <td className="py-2 px-4 align-top">
+                        <p className="font-medium text-sm text-gray-900 dark:text-gray-100 leading-snug">{tenant.tenantName}</p>
+                        {tenant.tenantEmail && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-all">{tenant.tenantEmail}</p>
+                        )}
+                      </td>
+                      <td className="py-2 px-4 text-center text-sm text-gray-900 dark:text-gray-100 align-middle tabular-nums">
+                        {tenant.userCount}
+                      </td>
+                      <td className="py-2 px-4 text-center text-sm font-semibold text-gray-900 dark:text-gray-100 align-middle tabular-nums">
+                        {tenant.totalCalculations.toLocaleString("tr-TR")}
+                      </td>
+                      <td className="py-2 px-4 align-top max-w-[11rem] sm:max-w-[14rem]">
+                        {distEntries.length === 0 ? (
+                          <span className="text-xs text-gray-500 dark:text-gray-400">Veri yok</span>
+                        ) : (
+                          <div className="flex flex-col gap-1.5 min-w-0">
+                            <div className="flex flex-wrap gap-1">
+                              {previewEntries.map(([type, count]) => (
+                                <Badge key={type} variant="secondary" className="text-xs font-normal shrink-0">
+                                  {formatTypeName(type)}: {count.toLocaleString("tr-TR")}
+                                </Badge>
+                              ))}
+                            </div>
+                            {showDistributionModalCta ? (
+                              <button
+                                type="button"
+                                onClick={() => setDistributionModalTenant(tenant)}
+                                className="text-left text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline w-fit"
+                              >
+                                Tümünü Gör
+                              </button>
+                            ) : null}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 px-4 align-top text-sm text-gray-600 dark:text-gray-400">
+                        <div className="max-w-[12rem] sm:max-w-[16rem] min-w-0">
+                          <p className="text-gray-900 dark:text-gray-100 leading-snug break-words" title={sonHesaplamaTitle}>
+                            {sonHesaplamaBaslik}
+                          </p>
+                          {distSummary ? (
+                            <p
+                              className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-snug line-clamp-2 break-words"
+                              title={distSummary}
+                            >
+                              {distSummary}
+                            </p>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="py-2 px-4 text-center align-middle">
+                        {tenant.totalCalculations > 0 ? (
+                          <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">Aktif</Badge>
+                        ) : (
+                          <Badge variant="secondary">Pasif</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </CardContent>
       </Card>
+
+      <Dialog
+        open={distributionModalTenant !== null}
+        onOpenChange={(open) => {
+          if (!open) setDistributionModalTenant(null);
+        }}
+      >
+        <DialogContent className="max-w-md max-h-[min(90vh,28rem)] flex flex-col gap-0">
+          {distributionModalTenant ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="pr-8 leading-snug">{distributionModalTenant.tenantName}</DialogTitle>
+                <DialogDescription>Hesaplama tipi dağılımı</DialogDescription>
+              </DialogHeader>
+              <div className="overflow-y-auto flex-1 min-h-0 py-3 border-y border-gray-100 dark:border-gray-700 my-3">
+                <ul className="space-y-0 divide-y divide-gray-100 dark:divide-gray-700">
+                  {sortedTenantDistributionEntries(distributionModalTenant).map(([type, count]) => (
+                    <li
+                      key={type}
+                      className="flex justify-between gap-4 py-2.5 text-sm first:pt-0 last:pb-0"
+                    >
+                      <span className="text-gray-900 dark:text-gray-100 leading-snug break-words min-w-0">
+                        {formatTypeName(type)}
+                      </span>
+                      <span className="shrink-0 tabular-nums font-semibold text-gray-700 dark:text-gray-300">
+                        {count.toLocaleString("tr-TR")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <DialogFooter className="mt-0 sm:mt-0">
+                <Button type="button" variant="outline" onClick={() => setDistributionModalTenant(null)}>
+                  Kapat
+                </Button>
+              </DialogFooter>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
