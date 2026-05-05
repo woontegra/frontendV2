@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/utils/apiClient";
 import { getSubscriptionTypeLabel } from "@/utils/labelMappings";
+import StarterWelcomeModal from "@/components/StarterWelcomeModal";
 import {
   calculateSubscription,
   subscriptionProgressColor,
@@ -145,6 +146,7 @@ export default function DashboardPage() {
   const [financial, setFinancial] = useState<FinancialSummary | null>(null);
   const [period, setPeriod] = useState<Period>("aylik");
   const [detailRow, setDetailRow] = useState<null | ReturnType<typeof buildRecentRows>[number]>(null);
+  const [showStarterWelcome, setShowStarterWelcome] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -228,6 +230,30 @@ export default function DashboardPage() {
       hour: "2-digit", minute: "2-digit",
     });
   }, []);
+
+  const starterPlan = (currentUser?.licenseType || "").toLowerCase() === "starter";
+  const starterUserKey = (currentUser?.email || "anonymous").toLowerCase();
+
+  useEffect(() => {
+    if (!starterPlan) return;
+
+    const seenKey = `starter_welcome_seen_${starterUserKey}`;
+    const hideKey = `starter_welcome_hide_${starterUserKey}`;
+    const alreadySeen = localStorage.getItem(seenKey) === "1";
+    const hideForever = localStorage.getItem(hideKey) === "1";
+
+    if (!alreadySeen && !hideForever) {
+      setShowStarterWelcome(true);
+    }
+  }, [starterPlan, starterUserKey]);
+
+  const handleStarterWelcomeClose = (dontShowAgain: boolean) => {
+    const seenKey = `starter_welcome_seen_${starterUserKey}`;
+    const hideKey = `starter_welcome_hide_${starterUserKey}`;
+    localStorage.setItem(seenKey, "1");
+    if (dontShowAgain) localStorage.setItem(hideKey, "1");
+    setShowStarterWelcome(false);
+  };
 
   // ── Son kayıt adı ──────────────────────────────────────────────────────────
   const lastRecordName = savedCases[0]?.name ?? "-";
@@ -376,6 +402,10 @@ export default function DashboardPage() {
   // ─── JSX ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5 p-3 sm:p-5">
+      <StarterWelcomeModal
+        open={showStarterWelcome}
+        onClose={handleStarterWelcomeClose}
+      />
 
       {/* ── 1. İstatistik Kartları ─────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
