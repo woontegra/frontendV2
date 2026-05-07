@@ -32,6 +32,7 @@ export default function AppShell({ showLayout = true }: Props) {
     () => localStorage.getItem("sidebarCollapsed") === "true"
   );
   const location = useLocation();
+  const isAdminRoute = location.pathname.startsWith("/admin");
 
   const isStandalone =
     location.pathname === "/login" ||
@@ -72,7 +73,15 @@ export default function AppShell({ showLayout = true }: Props) {
       >
         <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <Breadcrumb />
-          <Outlet />
+          <div
+            className={
+              isAdminRoute
+                ? "admin-compact-typography text-gray-700 dark:text-gray-300"
+                : ""
+            }
+          >
+            <Outlet />
+          </div>
         </div>
       </main>
 

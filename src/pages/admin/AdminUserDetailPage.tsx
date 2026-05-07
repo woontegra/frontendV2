@@ -14,6 +14,14 @@ interface UserDetailData {
   license: { licenseKey: string; status: string; baslangic: string | null; bitis: string | null; sonGorulme: string | null; sonIP: string | null; supheli: boolean; deviceCount: number; remainingDays: number | null } | null;
   usageStats: { totalCalculations: number; last30DaysCalculations: number; mostUsedModule: { name: string; type: string } | null; lastCalculationDate: string | null };
   loginStats: { totalLogins: number; lastLoginDate: string | null; lastLoginIP: string | null };
+  demoOnboarding?: {
+    shown: boolean;
+    closed: boolean;
+    modalSelection: string | null;
+    firstCalculationCompleted: boolean;
+    firstCalculationType: string | null;
+    firstCalculationAt: string | null;
+  };
   tickets: Array<{ id: number; subject: string; status: string; priority: string; createdAt: string }>;
   ipLoginHistory: Array<{ ip: string | null; at: string; userAgent?: string | null }>;
 }
@@ -70,7 +78,7 @@ export default function AdminUserDetailPage() {
     );
   }
 
-  const { user, subscription, license, usageStats, loginStats, tickets, ipLoginHistory } = data;
+  const { user, subscription, license, usageStats, loginStats, tickets, ipLoginHistory, demoOnboarding } = data;
   const sub = subscription ?? { type: "standard", startDate: null, endDate: null, remainingDays: null, status: "active" };
   const usage = usageStats ?? { totalCalculations: 0, last30DaysCalculations: 0, mostUsedModule: null, lastCalculationDate: null };
   const login = loginStats ?? { totalLogins: 0, lastLoginDate: null, lastLoginIP: null };
@@ -151,6 +159,21 @@ export default function AdminUserDetailPage() {
           <p className="text-sm"><span className="text-gray-500">Toplam giriş:</span> {login.totalLogins ?? NO_DATA}</p>
           <p className="text-sm"><span className="text-gray-500">Son giriş:</span> {fmtDateTime(login.lastLoginDate)}</p>
           <p className="text-sm"><span className="text-gray-500">Son IP:</span> {login.lastLoginIP ?? NO_DATA}</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Zap className="h-4 w-4" /> Demo Hızlı Başlangıç Takibi</CardTitle>
+          <CardDescription>Demo onboarding modal etkileşim metrikleri</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm"><span className="text-gray-500">Hızlı başlangıç gösterildi:</span> {demoOnboarding?.shown ? "Evet" : "Hayır"}</p>
+          <p className="text-sm"><span className="text-gray-500">Modal kapatıldı:</span> {demoOnboarding?.closed ? "Evet" : "Hayır"}</p>
+          <p className="text-sm"><span className="text-gray-500">Modal seçimi:</span> {demoOnboarding?.modalSelection || NO_DATA}</p>
+          <p className="text-sm"><span className="text-gray-500">İlk hesaplama yapıldı:</span> {demoOnboarding?.firstCalculationCompleted ? "Evet" : "Hayır"}</p>
+          <p className="text-sm"><span className="text-gray-500">İlk hesaplama türü:</span> {demoOnboarding?.firstCalculationType || NO_DATA}</p>
+          <p className="text-sm"><span className="text-gray-500">İlk hesaplama tarihi:</span> {fmtDateTime(demoOnboarding?.firstCalculationAt)}</p>
         </CardContent>
       </Card>
 

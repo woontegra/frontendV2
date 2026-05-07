@@ -12,6 +12,7 @@ import {
   History,
   Key,
   Mail,
+  Building2,
   Smartphone,
   Star,
 } from "lucide-react";
@@ -30,6 +31,7 @@ const ADMIN_CARDS = [
   { to: "/admin/licenses", label: "Lisans Yönetimi", icon: Key },
   { to: "/admin/device-management", label: "Cihaz Yönetimi", icon: Smartphone },
   { to: "/admin/email-notifications", label: "Email Bildirimleri", icon: Mail },
+  { to: "/admin/bar-associations", label: "Baro Yönetimi", icon: Building2 },
   { to: "/admin/feedback", label: "Kullanıcı Geri Bildirimleri", icon: Star },
 ];
 

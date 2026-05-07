@@ -102,7 +102,8 @@ export function useKaydet() {
       if (!kayitAdi) {
         // İsim yoksa API'den mevcut kaydı al (sayfa load etmemiş olabilir)
         try {
-          const loaded = await yukleHesap(normalized.mevcutId, normalized.hesapTuru);
+          // Burada amaç sadece mevcut kayıt adını almak; tür doğrulaması bu adımda gerekli değil.
+          const loaded = await yukleHesap(normalized.mevcutId);
           kayitAdi = loaded.success && loaded.name ? loaded.name : "Mevcut Kayıt";
         } catch {
           kayitAdi = "Mevcut Kayıt";

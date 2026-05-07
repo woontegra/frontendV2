@@ -274,11 +274,13 @@ export async function authenticatedFetch(url: string, options: RequestInit = {})
 /**
  * Login helper
  */
-export async function login(email: string, password: string): Promise<any> {
+export async function login(email: string, password: string, baroTrackingToken?: string): Promise<any> {
+  const token = String(baroTrackingToken || "").trim();
   const response = await fetch(`${API_URL}/api/auth/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'x-baro-tracking-token': token } : {}),
     },
     body: JSON.stringify({ email, password }),
   });

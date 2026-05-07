@@ -108,6 +108,10 @@ export const MODULE_TYPE_LABELS: Record<string, string> = {
   "kismi-sureli": "Kısmi Süreli",
   temel_profil: "Temel Profil",
   davaci_ucreti: "Davacı Ücreti",
+  icra_takip_damga_vergisi_kesintili: "İcra Takip Brütten Nete - Damga Vergisi Kesintili",
+  icra_takip_gelir_ve_damga_vergisi_kesintili: "İcra Takip Brütten Nete - Gelir ve Damga Vergisi Kesintili",
+  icra_takip_istisnasiz_full_kesintili: "İcra Takip Brütten Nete - İstisnasız Full Kesintili",
+  icra_takip_istisnali_full_kesintili: "İcra Takip Brütten Nete - İstisnalı Full Kesintili",
 };
 
 export function getSubscriptionTypeLabel(value: string | null | undefined): string {

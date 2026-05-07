@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/utils/apiClient";
 import { getSubscriptionTypeLabel } from "@/utils/labelMappings";
 import StarterWelcomeModal from "@/components/StarterWelcomeModal";
+import { trackDemoOnboardingEvent } from "@/shared/utils/demoOnboarding";
 import {
   calculateSubscription,
   subscriptionProgressColor,
@@ -231,11 +232,11 @@ export default function DashboardPage() {
     });
   }, []);
 
-  const starterPlan = (currentUser?.licenseType || "").toLowerCase() === "starter";
+  const isDemoUser = (currentUser?.licenseType || "").toLowerCase() === "demo" || !!userInfo?.demoLicense;
   const starterUserKey = (currentUser?.email || "anonymous").toLowerCase();
 
   useEffect(() => {
-    if (!starterPlan) return;
+    if (!isDemoUser) return;
 
     const seenKey = `starter_welcome_seen_${starterUserKey}`;
     const hideKey = `starter_welcome_hide_${starterUserKey}`;
@@ -245,7 +246,12 @@ export default function DashboardPage() {
     if (!alreadySeen && !hideForever) {
       setShowStarterWelcome(true);
     }
-  }, [starterPlan, starterUserKey]);
+  }, [isDemoUser, starterUserKey]);
+
+  useEffect(() => {
+    if (!showStarterWelcome || !isDemoUser) return;
+    trackDemoOnboardingEvent("modal_shown");
+  }, [showStarterWelcome, isDemoUser]);
 
   const handleStarterWelcomeClose = (dontShowAgain: boolean) => {
     const seenKey = `starter_welcome_seen_${starterUserKey}`;
@@ -253,6 +259,7 @@ export default function DashboardPage() {
     localStorage.setItem(seenKey, "1");
     if (dontShowAgain) localStorage.setItem(hideKey, "1");
     setShowStarterWelcome(false);
+    trackDemoOnboardingEvent("modal_closed", { dontShowAgain });
   };
 
   // ── Son kayıt adı ──────────────────────────────────────────────────────────

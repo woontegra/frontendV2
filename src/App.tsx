@@ -34,6 +34,7 @@ import LogsPage from "@/pages/admin/LogsPage";
 import AdminLicensesPage from "@/pages/admin/AdminLicensesPage";
 import AdminTenantAnalytics from "@/pages/admin/AdminTenantAnalytics";
 import AdminEmailNotifications from "@/pages/admin/AdminEmailNotifications";
+import AdminBarAssociationsPage from "@/pages/admin/AdminBarAssociationsPage";
 import AdminAuditLogPage from "@/pages/admin/AdminAuditLogPage";
 import DemoConversionPage from "@/pages/admin/DemoConversionPage";
 import AdminChatPage from "@/pages/admin/AdminChatPage";
@@ -80,6 +81,11 @@ import NotificationsPage from "@/pages/profile/NotificationsPage";
 import PrimAlacagiPage from "@/pages/prim-alacagi/PrimAlacagiPage";
 import KotuNiyetTazminatiPage from "@/pages/kotu-niyet-tazminati/KotuNiyetTazminatiPage";
 import HaksizFesihTazminatiPage from "@/pages/haksiz-fesih-tazminati/HaksizFesihTazminatiPage";
+import IcraTakipSelectionPage from "@/pages/icra-takip-brutten-nete/IcraTakipSelectionPage";
+import DamgaVergisiKesintiliPage from "@/pages/icra-takip-brutten-nete/DamgaVergisiKesintiliPage";
+import GelirVeDamgaVergisiKesintiliPage from "@/pages/icra-takip-brutten-nete/GelirVeDamgaVergisiKesintiliPage";
+import IstisnaliFullKesintiliPage from "@/pages/icra-takip-brutten-nete/IstisnaliFullKesintiliPage";
+import IstisnasizFullKesintiliPage from "@/pages/icra-takip-brutten-nete/IstisnasizFullKesintiliPage";
 import AyrimcilikTazminatiPage from "@/pages/ayrimcilik-tazminati/AyrimcilikTazminatiPage";
 import IseAlmamaTazminatiPage from "@/pages/ise-almama-tazminati/IseAlmamaTazminatiPage";
 import BostaGecenSureUcretiPage from "@/pages/bosta-gecen-sure-ucreti/BostaGecenSureUcretiPage";
@@ -291,6 +297,17 @@ function App() {
         <Route path="ayrimcilik-tazminati/:id" element={<AyrimcilikTazminatiPage />} />
         <Route path="haksiz-fesih-tazminati" element={<HaksizFesihTazminatiPage />} />
         <Route path="haksiz-fesih-tazminati/:id" element={<HaksizFesihTazminatiPage />} />
+        <Route path="icra-takip-brutten-nete" element={<Outlet />}>
+          <Route index element={<IcraTakipSelectionPage />} />
+          <Route path="damga-vergisi-kesintili" element={<DamgaVergisiKesintiliPage />} />
+          <Route path="damga-vergisi-kesintili/:id" element={<DamgaVergisiKesintiliPage />} />
+          <Route path="gelir-ve-damga-vergisi-kesintili" element={<GelirVeDamgaVergisiKesintiliPage />} />
+          <Route path="gelir-ve-damga-vergisi-kesintili/:id" element={<GelirVeDamgaVergisiKesintiliPage />} />
+          <Route path="istisnali-full-kesintili" element={<IstisnaliFullKesintiliPage />} />
+          <Route path="istisnali-full-kesintili/:id" element={<IstisnaliFullKesintiliPage />} />
+          <Route path="istisnasiz-full-kesintili" element={<IstisnasizFullKesintiliPage />} />
+          <Route path="istisnasiz-full-kesintili/:id" element={<IstisnasizFullKesintiliPage />} />
+        </Route>
         <Route path="yillik-izin" element={<Outlet />}>
           <Route index element={<YillikIzinSelectionPage />} />
           <Route path="standart" element={<YillikIzinStandartPage />} />
@@ -358,6 +375,7 @@ function App() {
         <Route path="admin/licenses" element={<AdminRoute><AdminLicensesPage /></AdminRoute>} />
         <Route path="admin/analytics" element={<AdminRoute><AdminTenantAnalytics /></AdminRoute>} />
         <Route path="admin/email-notifications" element={<AdminRoute><AdminEmailNotifications /></AdminRoute>} />
+        <Route path="admin/bar-associations" element={<AdminRoute><AdminBarAssociationsPage /></AdminRoute>} />
         <Route path="admin/audit-logs" element={<AdminRoute><AdminAuditLogPage /></AdminRoute>} />
         <Route path="admin/demo-conversion" element={<AdminRoute><DemoConversionPage /></AdminRoute>} />
         <Route path="admin/chat" element={<AdminRoute><AdminChatPage /></AdminRoute>} />

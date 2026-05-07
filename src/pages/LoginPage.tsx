@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Lock, Shield, Sparkles, Eye, EyeOff } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { login as authLogin } from "@/utils/authToken";
@@ -12,6 +12,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const { setUser } = useAuth();
   const { success, error } = useToast();
 
@@ -20,7 +21,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const data = await authLogin(email, password);
+      const baroTrackingToken = new URLSearchParams(location.search).get("bt") || "";
+      const data = await authLogin(email, password, baroTrackingToken);
 
       setUser({
         ...data.user,

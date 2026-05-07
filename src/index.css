@@ -22,3 +22,54 @@ body {
   overflow-x: hidden;
   max-width: 100vw;
 }
+
+/* Admin panelde daha kibar/ince tipografi standardı */
+.admin-compact-typography,
+.admin-compact-typography * {
+  font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.admin-compact-typography {
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
+.admin-compact-typography h1 {
+  font-size: 1.5rem !important;
+  line-height: 1.25 !important;
+  font-weight: 600 !important;
+}
+
+.admin-compact-typography h2 {
+  font-size: 1.25rem !important;
+  line-height: 1.3 !important;
+  font-weight: 600 !important;
+}
+
+.admin-compact-typography h3 {
+  font-size: 1rem !important;
+  line-height: 1.35 !important;
+  font-weight: 600 !important;
+}
+
+.admin-compact-typography th {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.01em;
+}
+
+.admin-compact-typography td,
+.admin-compact-typography p,
+.admin-compact-typography label,
+.admin-compact-typography span,
+.admin-compact-typography button,
+.admin-compact-typography input,
+.admin-compact-typography select,
+.admin-compact-typography textarea {
+  font-size: 13px;
+  font-weight: 400;
+}

@@ -24,6 +24,7 @@ const MENU_ITEMS = [
   { id: "ise-almama", label: "İşe Başlatmama Tazminatı", to: "/ise-almama-tazminati" },
   { id: "ayrimcilik", label: "Ayrımcılık Tazminatı", to: "/ayrimcilik-tazminati" },
   { id: "haksiz-fesih", label: "Haksız Fesih Tazminatı", to: "/haksiz-fesih-tazminati" },
+  { id: "icra-takip-brutten-nete", label: "İcra Takip Brütten Nete", to: "/icra-takip-brutten-nete", hasSubPages: true, isNew: true },
 ];
 
 type Props = {
@@ -178,9 +179,16 @@ export default function Sidebar({ collapsed, onClose }: Props) {
             >
               {({ isActive }) => (
                 <div className="flex items-center min-w-0 w-full justify-between">
-                  <span className="flex items-center gap-2.5 min-w-0">
-                    <Menu className="w-4 h-4 flex-shrink-0" />
-                    <span className="truncate">{item.label}</span>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {"isNew" in item && item.isNew ? null : <Menu className="w-4 h-4 flex-shrink-0" />}
+                    <span className="truncate flex items-center gap-1.5">
+                      {"isNew" in item && item.isNew && (
+                        <span className="inline-flex items-center rounded-full bg-gradient-to-r from-fuchsia-500 via-pink-500 to-rose-500 text-white text-[8px] font-semibold px-1 py-0.5 shadow-sm">
+                          YENİ
+                        </span>
+                      )}
+                      <span className="truncate">{item.label}</span>
+                    </span>
                   </span>
                   <ChevronRight
                     className={`w-4 h-4 flex-shrink-0 transition-transform group-hover:translate-x-0.5 ${

@@ -28,6 +28,18 @@ const fmt = new Intl.NumberFormat("tr-TR", {
 
 function getRouteForType(type: string): string {
   const t = (type || "").toLowerCase();
+  if (t.includes("icra_takip") && t.includes("istisnali") && t.includes("full") && t.includes("kesintili")) {
+    return "/icra-takip-brutten-nete/istisnali-full-kesintili";
+  }
+  if (t.includes("icra_takip") && t.includes("istisnasiz") && t.includes("full") && t.includes("kesintili")) {
+    return "/icra-takip-brutten-nete/istisnasiz-full-kesintili";
+  }
+  if (t.includes("icra_takip") && t.includes("gelir") && t.includes("damga")) {
+    return "/icra-takip-brutten-nete/gelir-ve-damga-vergisi-kesintili";
+  }
+  if (t.includes("icra_takip") && t.includes("damga")) {
+    return "/icra-takip-brutten-nete/damga-vergisi-kesintili";
+  }
   if (t.includes("tanikli") && t.includes("standart")) return "/fazla-mesai/tanikli-standart";
   if (t.includes("haftalik") && t.includes("karma")) return "/fazla-mesai/haftalik-karma";
   if (t.includes("donemsel") && t.includes("haftalik")) return "/fazla-mesai/donemsel-haftalik";
