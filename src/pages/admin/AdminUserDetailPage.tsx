@@ -118,9 +118,11 @@ export default function AdminUserDetailPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("genel");
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
-  const [confirmType, setConfirmType] = useState<null | "demo3" | "status" | "trial" | "subscription">(null);
+  const [confirmType, setConfirmType] = useState<null | "demo3" | "status" | "trial" | "subscription" | "convertPro">(null);
   const [trialDays, setTrialDays] = useState("3");
   const [extendDays, setExtendDays] = useState("30");
+  const [convertProType, setConvertProType] = useState<"professional_monthly" | "professional_annual">("professional_monthly");
+  const [convertProEndDate, setConvertProEndDate] = useState("");
   const [deviceModalOpen, setDeviceModalOpen] = useState(false);
   const [mailModalOpen, setMailModalOpen] = useState(false);
   const [mailSending, setMailSending] = useState(false);
@@ -206,6 +208,10 @@ export default function AdminUserDetailPage() {
   const tickets = data?.tickets ?? [];
   const ipLoginHistory = data?.ipLoginHistory ?? [];
   const demo = data?.demoOnboarding;
+  const subscriptionType = String(sub.type || "").toLowerCase();
+  const isDemoUser = subscriptionType.includes("demo");
+  const isProfessionalUser = subscriptionType.includes("professional") || subscriptionType.includes("annual");
+  const canManageDevices = !!license?.licenseId;
 
   const userStatusBadge = useMemo(() => {
     const s = (user?.status || "").toLowerCase();
@@ -214,15 +220,46 @@ export default function AdminUserDetailPage() {
     return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
   }, [user?.status]);
 
-  const riskLabel = useMemo(() => {
-    if (!data) return "Orta";
-    const hasNoCalc = (usage.totalCalculations ?? 0) === 0;
-    const hasLicenseRisk = (sub.remainingDays ?? 999) <= 7;
-    const suspicious = !!license?.supheli;
-    if (suspicious || (hasNoCalc && hasLicenseRisk)) return "Müdahale Gerekli";
-    if (hasNoCalc || hasLicenseRisk) return "Takip Gerekli";
-    return "Normal";
-  }, [data, usage.totalCalculations, sub.remainingDays, license?.supheli]);
+  const interventionReasons = useMemo(() => {
+    if (!data) return [];
+    const reasons: string[] = [];
+    const isDemoUser = String(sub.type || "").includes("demo");
+    const totalLogins = login.totalLogins ?? 0;
+    const totalCalcs = usage.totalCalculations ?? 0;
+    const remainingDays = sub.remainingDays ?? null;
+
+    if (isDemoUser && totalLogins === 0) {
+      reasons.push("Demo kullanıcısı giriş yapmadı");
+    }
+    if (totalLogins > 0 && totalCalcs === 0) {
+      reasons.push("Giriş yaptı ancak hesaplama yapmadı");
+    }
+    if (isDemoUser && remainingDays != null && remainingDays > 0 && remainingDays <= 3) {
+      reasons.push(`Demo süresi ${remainingDays} gün içinde bitiyor`);
+    }
+    if (isDemoUser && (remainingDays != null && remainingDays <= 0)) {
+      reasons.push("Demo süresi dolmuş");
+    }
+    if (login.lastLoginDate) {
+      const lastLogin = new Date(login.lastLoginDate);
+      const diffMs = Date.now() - lastLogin.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      if (diffDays >= 30) {
+        reasons.push("Uzun süredir giriş yapmadı");
+      }
+    }
+    if (!isDemoUser && String(user?.status || "").toLowerCase() === "active" && totalCalcs === 0) {
+      reasons.push("Aktif kullanıcı ama kullanım yok");
+    }
+    if (license?.supheli) {
+      reasons.push("Şüpheli kullanım işareti var");
+    }
+    return reasons;
+  }, [data, sub.type, sub.remainingDays, login.totalLogins, login.lastLoginDate, usage.totalCalculations, user?.status, license?.supheli]);
+
+  const riskLabel = interventionReasons.length > 0 ? "Müdahale Gerekli" : "Normal";
+  const interventionSummary =
+    interventionReasons.length > 0 ? interventionReasons.join(" · ") : "Kullanıcıda takip gerektiren bir durum yok.";
 
   const toggleUserStatus = async () => {
     if (!id || !user) return;
@@ -300,6 +337,13 @@ export default function AdminUserDetailPage() {
     const next = new Date(safeBase);
     next.setDate(next.getDate() + days);
     return next;
+  };
+
+  const addDaysFromToday = (days: number) => {
+    const today = new Date();
+    const next = new Date(today.getTime());
+    next.setDate(next.getDate() + days);
+    return next.toISOString().split("T")[0];
   };
 
   const getActivityActionLabel = (action: string) => ACTION_LABELS[action] || action;
@@ -513,6 +557,46 @@ export default function AdminUserDetailPage() {
     }
   };
 
+  const openConvertProModal = () => {
+    setConvertProType("professional_monthly");
+    setConvertProEndDate(addDaysFromToday(30));
+    setConfirmType("convertPro");
+  };
+
+  const runConvertToProfessional = async () => {
+    if (!id || !user) return;
+    if (!convertProEndDate) {
+      toastError("Eksik alan", "Bitiş tarihi zorunludur");
+      return;
+    }
+    setActionBusy("convertPro");
+    try {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(convertProEndDate);
+      end.setHours(23, 59, 59, 999);
+
+      const res = await apiClient(`/api/admin/users/${id}/subscription`, {
+        method: "POST",
+        headers: { "x-user-role": "admin", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscriptionType: convertProType,
+          subscriptionStartsAt: start.toISOString(),
+          subscriptionEndsAt: end.toISOString(),
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.subscriptionType) throw new Error(body?.error || "Profesyonel dönüşüm başarısız");
+      success(`Kullanıcı profesyonel pakete geçirildi: ${getSubscriptionTypeLabel(convertProType)}`);
+      await load();
+      setConfirmType(null);
+    } catch (e: any) {
+      toastError("İşlem başarısız", e?.message || "Profesyonel dönüşüm başarısız");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
   if (loading && !data) {
     return (
       <div className="w-full px-4 py-5 md:px-6 md:py-7 space-y-5">
@@ -580,7 +664,11 @@ export default function AdminUserDetailPage() {
               <Badge variant="outline">{getSubscriptionTypeLabel(sub.type)}</Badge>
               <Badge variant="outline">{sub.remainingDays != null ? `${Math.max(0, sub.remainingDays)} gün` : NO_DATA}</Badge>
               <Badge variant="outline">Son giriş: {fmtDateTime(login.lastLoginDate)}</Badge>
-              <Badge variant="outline" className={riskLabel === "Müdahale Gerekli" ? "border-rose-300 text-rose-600" : ""}>
+              <Badge
+                variant="outline"
+                title={interventionSummary}
+                className={riskLabel === "Müdahale Gerekli" ? "border-rose-300 text-rose-600" : ""}
+              >
                 {riskLabel}
               </Badge>
             </div>
@@ -616,23 +704,46 @@ export default function AdminUserDetailPage() {
           <CardDescription>Mevcut çalışan admin işlemlerini bu kullanıcı için tek yerden çalıştır.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setConfirmType("demo3")}
-            disabled={actionBusy != null || !String(sub.type || "").startsWith("demo")}
-          >
-            +3 Gün Ver
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setConfirmType("subscription")} disabled={actionBusy != null}>
-            Lisans Uzat
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setConfirmType("trial")} disabled={actionBusy != null}>
-            Trial Süresi Ekle
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setDeviceModalOpen(true)} disabled={actionBusy != null}>
-            Cihazları Yönet
-          </Button>
+          {isDemoUser && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmType("demo3")}
+                disabled={actionBusy != null}
+                title="Bu işlem yalnızca deneme kullanıcıları için kullanılabilir."
+              >
+                +3 Gün Ver
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmType("trial")}
+                disabled={actionBusy != null}
+                title="Bu işlem yalnızca deneme kullanıcıları için kullanılabilir."
+              >
+                Trial Süresi Ekle
+              </Button>
+              <Button size="sm" variant="outline" onClick={openConvertProModal} disabled={actionBusy != null}>
+                Profesyonel'e Çevir
+              </Button>
+              {canManageDevices && (
+                <Button size="sm" variant="outline" onClick={() => setDeviceModalOpen(true)} disabled={actionBusy != null}>
+                  Cihazları Yönet
+                </Button>
+              )}
+            </>
+          )}
+          {isProfessionalUser && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setConfirmType("subscription")} disabled={actionBusy != null}>
+                Lisans Uzat
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setDeviceModalOpen(true)} disabled={actionBusy != null}>
+                Cihazları Yönet
+              </Button>
+            </>
+          )}
           <Button size="sm" variant="outline" onClick={openMailModal} disabled={actionBusy != null}>
             Mail Gönder
           </Button>
@@ -698,7 +809,17 @@ export default function AdminUserDetailPage() {
               <p className="text-slate-500">Abonelik</p><p className="font-medium">{getSubscriptionTypeLabel(sub.type)}</p>
             </div>
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3">
-              <p className="text-slate-500">Müdahale durumu</p><p className="font-medium">{riskLabel}</p>
+              <p className="text-slate-500">Müdahale durumu</p>
+              <p className={`font-medium ${riskLabel === "Müdahale Gerekli" ? "text-rose-600" : ""}`}>{riskLabel}</p>
+              {interventionReasons.length > 0 ? (
+                <ul className="mt-1 space-y-0.5 text-xs text-slate-600 dark:text-slate-300 list-disc pl-4">
+                  {interventionReasons.slice(0, 3).map((reason, idx) => (
+                    <li key={`${reason}-${idx}`}>{reason}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">Kullanıcıda takip gerektiren bir durum yok.</p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -953,6 +1074,60 @@ export default function AdminUserDetailPage() {
             <Button variant="outline" size="sm" onClick={() => setConfirmType(null)} disabled={actionBusy === "subscription"}>İptal</Button>
             <Button size="sm" onClick={runExtendSubscription} disabled={actionBusy === "subscription"}>
               {actionBusy === "subscription" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Onayla"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmType === "convertPro"} onOpenChange={(o) => !o && setConfirmType(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Profesyonel'e Çevir</DialogTitle>
+            <DialogDescription>Deneme hesabını profesyonel pakete geçirin.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1">
+              <p><span className="text-slate-500">Kullanıcı:</span> {user?.name || NO_DATA}</p>
+              <p><span className="text-slate-500">E-posta:</span> {user?.email || NO_DATA}</p>
+              <p><span className="text-slate-500">Mevcut paket:</span> Deneme</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="convert-pro-type">Geçilecek paket</Label>
+              <select
+                id="convert-pro-type"
+                value={convertProType}
+                onChange={(e) => {
+                  const nextType = e.target.value as "professional_monthly" | "professional_annual";
+                  setConvertProType(nextType);
+                  setConvertProEndDate(addDaysFromToday(nextType === "professional_monthly" ? 30 : 365));
+                }}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="professional_monthly">Profesyonel Aylık</option>
+                <option value="professional_annual">Profesyonel Yıllık</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Başlangıç tarihi</Label>
+                <Input value={new Date().toISOString().split("T")[0]} readOnly />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="convert-pro-end-date">Bitiş tarihi</Label>
+                <Input
+                  id="convert-pro-end-date"
+                  type="date"
+                  value={convertProEndDate}
+                  onChange={(e) => setConvertProEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <p><span className="text-slate-500">Cihaz hakkı:</span> 1 cihaz</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setConfirmType(null)} disabled={actionBusy === "convertPro"}>İptal</Button>
+            <Button size="sm" onClick={runConvertToProfessional} disabled={actionBusy === "convertPro"}>
+              {actionBusy === "convertPro" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Onayla"}
             </Button>
           </DialogFooter>
         </DialogContent>
