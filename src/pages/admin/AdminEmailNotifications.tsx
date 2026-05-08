@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -54,6 +55,7 @@ function normalizeImageUrl(value: string): string {
 }
 
 export default function AdminEmailNotifications() {
+  const [searchParams] = useSearchParams();
   const { success, error } = useToast();
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -101,6 +103,17 @@ export default function AdminEmailNotifications() {
   const [unsubscribes, setUnsubscribes] = useState<{ id: number; email: string; unsubscribedAt: string; source: string | null }[]>([]);
   const [unsubscribesLoading, setUnsubscribesLoading] = useState(false);
   const [blacklistedEmails, setBlacklistedEmails] = useState<string[]>([]);
+
+  useEffect(() => {
+    const emailFromQuery = searchParams.get("email")?.trim();
+    if (!emailFromQuery) return;
+    setFormData((prev) => ({
+      ...prev,
+      recipientType: "custom",
+      customEmails: emailFromQuery,
+    }));
+    setTestEmail(emailFromQuery);
+  }, [searchParams]);
 
   const recipientTypes = [
     { value: "all", label: "Tüm Kullanıcılar", icon: Users },

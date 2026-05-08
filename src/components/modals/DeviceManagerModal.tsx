@@ -63,7 +63,7 @@ export default function DeviceManagerModal({ licenseId, licenseKey, onClose, onD
     try {
       const res = await apiClient(`/api/admin/licenses/${licenseId}/devices/add-slot`, { method: "POST" });
       const data = await res.json();
-      if (data.success) { success(data.message || "Yeni cihaz hakkı eklendi"); onDeviceUpdate(); }
+      if (data.success) { success(data.message || "Yeni cihaz hakkı eklendi"); await loadDevices(); onDeviceUpdate(); }
       else error(data.error || "Eklenemedi");
     } catch { error("Hata oluştu"); }
     finally { setAddingSlot(false); }
