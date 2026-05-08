@@ -68,7 +68,7 @@ export default function LogsPage() {
   useEffect(() => {
     loadStats();
     loadLogs();
-  }, [pagination.page, levelFilter, typeFilter, tenantFilter, searchQuery]);
+  }, [pagination.page, pagination.limit, levelFilter, typeFilter, tenantFilter, searchQuery]);
 
   const loadStats = async () => {
     try {
@@ -329,10 +329,24 @@ export default function LogsPage() {
           </table>
         </div>
 
-        {pagination.totalPages > 1 && (
+        {pagination.total > 0 && (
           <div className="flex justify-between items-center p-4 border-t">
-            <div className="text-sm text-gray-600 dark:text-gray-400">
-              Toplam {pagination.total} kayıt (Sayfa {pagination.page} / {pagination.totalPages})
+            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+              <span>Sayfa başına</span>
+              <select
+                value={pagination.limit}
+                onChange={(e) =>
+                  setPagination((p) => ({ ...p, page: 1, limit: Number(e.target.value) }))
+                }
+                className={selectCls}
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+              <span>
+                Toplam {pagination.total} kayıt (Sayfa {pagination.page} / {pagination.totalPages})
+              </span>
             </div>
             <div className="flex gap-2">
               <Button

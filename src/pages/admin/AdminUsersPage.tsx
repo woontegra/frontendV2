@@ -44,6 +44,8 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     loadUsers();
@@ -76,6 +78,7 @@ export default function AdminUsersPage() {
 
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
+      setCurrentPage(1);
     } catch (err) {
       console.error("Failed to load users:", err);
       error("Kullanıcılar yüklenemedi");
@@ -120,6 +123,9 @@ export default function AdminUsersPage() {
     const variant = variants[role] || variants.user;
     return <Badge className={`${variant.color} ${badgeCls}`}>{variant.label}</Badge>;
   };
+
+  const totalPages = Math.max(1, Math.ceil(users.length / pageSize));
+  const pagedUsers = users.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="space-y-4">
@@ -213,7 +219,7 @@ export default function AdminUsersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((user) => (
+                  {pagedUsers.map((user) => (
                     <tr
                       key={user.id}
                       className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
@@ -248,6 +254,48 @@ export default function AdminUsersPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!loading && users.length > 0 && (
+            <div className="mt-3 flex items-center justify-between border-t border-gray-200 pt-3 dark:border-gray-700">
+              <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+                <span>Sayfa başına</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className={selectCls}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {users.length} kayıt · Sayfa {currentPage}/{totalPages}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                >
+                  Önceki
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Sonraki
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>

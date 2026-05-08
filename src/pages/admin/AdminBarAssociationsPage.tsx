@@ -58,6 +58,8 @@ export default function AdminBarAssociationsPage() {
   const [status, setStatus] = useState("all");
   const [hasEmail, setHasEmail] = useState("all");
   const [hasKep, setHasKep] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -221,6 +223,19 @@ export default function AdminBarAssociationsPage() {
   };
 
   const rows = useMemo(() => items, [items]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, status, hasEmail, hasKep]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   return (
     <div className="space-y-6 p-6">
@@ -275,7 +290,7 @@ export default function AdminBarAssociationsPage() {
                   <tr><td className="px-3 py-3" colSpan={11}>Yükleniyor...</td></tr>
                 ) : rows.length === 0 ? (
                   <tr><td className="px-3 py-3" colSpan={11}>Kayıt bulunamadı.</td></tr>
-                ) : rows.map((r) => {
+                ) : pagedRows.map((r) => {
                   const lastLog = r.emailCampaignLogs?.[0];
                   const protocol = r.protocolFiles?.[0];
                   return (
@@ -312,6 +327,48 @@ export default function AdminBarAssociationsPage() {
               </tbody>
             </table>
           </div>
+          {!loading && rows.length > 0 && (
+            <div className="mt-3 flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-2">
+                <span>Sayfa başına</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {rows.length} kayıt · Sayfa {currentPage}/{totalPages}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                >
+                  Önceki
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Sonraki
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

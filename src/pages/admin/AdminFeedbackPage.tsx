@@ -32,6 +32,8 @@ export default function AdminFeedbackPage() {
   const [loading, setLoading] = useState(true);
   const [ratingFilter, setRatingFilter] = useState<string>("");
   const [userTypeFilter, setUserTypeFilter] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const queryParams = useMemo(() => {
     const p = new URLSearchParams();
@@ -61,6 +63,11 @@ export default function AdminFeedbackPage() {
   const summary = data?.summary;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
 
   const formatDate = (s: string) => {
     try {
@@ -79,6 +86,14 @@ export default function AdminFeedbackPage() {
 
   const userTypeLabel = (type: "Demo" | "Paid") =>
     type === "Demo" ? "Demo Kullanıcı" : "Ücretli Kullanıcı";
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [ratingFilter, userTypeFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   return (
     <div className="space-y-6">
@@ -193,7 +208,7 @@ export default function AdminFeedbackPage() {
                         </td>
                       </tr>
                     ) : (
-                      items.map((item) => (
+                      pagedItems.map((item) => (
                         <tr
                           key={item.id}
                           className="border-b border-gray-100 dark:border-gray-800"
@@ -241,6 +256,46 @@ export default function AdminFeedbackPage() {
                   </tbody>
                 </table>
               </div>
+              {items.length > 0 && (
+                <div className="mt-3 flex items-center justify-between border-t border-gray-200 pt-3 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-400">
+                  <div className="flex items-center gap-2">
+                    <span>Sayfa başına</span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      className="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                    </select>
+                    <span>
+                      Toplam {items.length} kayıt · Sayfa {currentPage}/{totalPages}
+                    </span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+                      disabled={currentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    >
+                      Önceki
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-gray-300 px-2 py-1 text-xs disabled:opacity-50 dark:border-gray-600"
+                      disabled={currentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    >
+                      Sonraki
+                    </button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </>

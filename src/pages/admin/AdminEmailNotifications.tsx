@@ -68,6 +68,7 @@ export default function AdminEmailNotifications() {
   const [trackingRows, setTrackingRows] = useState<BaroTracking[]>([]);
   const [selectedTrackingIds, setSelectedTrackingIds] = useState<number[]>([]);
   const [currentTrackingPage, setCurrentTrackingPage] = useState(1);
+  const [trackingPageSize, setTrackingPageSize] = useState(10);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [trackingSearch, setTrackingSearch] = useState("");
   const [trackingEventsOpen, setTrackingEventsOpen] = useState(false);
@@ -562,12 +563,11 @@ Woontegra Teknoloji Yazılım ve Dijital Hizmetler Ltd. Şti.
     }
   };
 
-  const trackingPageSize = 10;
   const trackingTotalPages = Math.max(1, Math.ceil(trackingRows.length / trackingPageSize));
   const pagedTrackingRows = useMemo(() => {
     const start = (currentTrackingPage - 1) * trackingPageSize;
     return trackingRows.slice(start, start + trackingPageSize);
-  }, [trackingRows, currentTrackingPage]);
+  }, [trackingRows, currentTrackingPage, trackingPageSize]);
   const allSelectedOnPage =
     pagedTrackingRows.length > 0 && pagedTrackingRows.every((r) => selectedTrackingIds.includes(r.id));
 
@@ -1109,9 +1109,24 @@ Woontegra Teknoloji Yazılım ve Dijital Hizmetler Ltd. Şti.
           </div>
           {!trackingLoading && trackingRows.length > 0 && (
             <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
-              <p>
-                Toplam {trackingRows.length} kayıt · Sayfa {currentTrackingPage}/{trackingTotalPages}
-              </p>
+              <div className="flex items-center gap-2">
+                <span>Sayfa başına</span>
+                <select
+                  value={trackingPageSize}
+                  onChange={(e) => {
+                    setTrackingPageSize(Number(e.target.value));
+                    setCurrentTrackingPage(1);
+                  }}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {trackingRows.length} kayıt · Sayfa {currentTrackingPage}/{trackingTotalPages}
+                </span>
+              </div>
               <div className="flex gap-2">
                 <Button
                   variant="outline"

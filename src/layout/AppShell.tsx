@@ -71,7 +71,11 @@ export default function AppShell({ showLayout = true }: Props) {
         }`}
         style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
       >
-        <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div
+          className={`w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 ${
+            isAdminRoute ? "max-w-none" : "max-w-6xl"
+          }`}
+        >
           <Breadcrumb />
           <div
             className={

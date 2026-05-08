@@ -120,6 +120,8 @@ export default function AdminLicensesPage() {
   const [search, setSearch] = useState("");
   const [packageFilter, setPackageFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [actioningId, setActioningId] = useState<number | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editRow, setEditRow] = useState<LicenseRow | null>(null);
@@ -156,6 +158,19 @@ export default function AdminLicensesPage() {
     const expired = list.filter((r) => r.status === "süresi_dolmuş").length;
     return { active, demo, expired };
   }, [list]);
+  const totalPages = Math.max(1, Math.ceil(list.length / pageSize));
+  const pagedList = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return list.slice(start, start + pageSize);
+  }, [list, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, packageFilter, statusFilter]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   const doChangePackage = async (userId: number, newPackage: string) => {
     setActioningId(userId);
@@ -320,7 +335,7 @@ export default function AdminLicensesPage() {
                       </td>
                     </tr>
                   ) : (
-                    list.map((row) => (
+                    pagedList.map((row) => (
                       <tr key={row.userId} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
                         <td className="py-2 px-3">
                           <div className="text-xs font-normal text-gray-800 dark:text-gray-200">{row.email}</div>
@@ -394,6 +409,48 @@ export default function AdminLicensesPage() {
               </table>
             )}
           </div>
+          {!loading && list.length > 0 && (
+            <div className="flex items-center justify-between border-t border-gray-200 pt-3 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-400">
+              <div className="flex items-center gap-2">
+                <span>Sayfa başına</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className={selectCls}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {list.length} kayıt · Sayfa {currentPage}/{totalPages}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                >
+                  Önceki
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2.5"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Sonraki
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

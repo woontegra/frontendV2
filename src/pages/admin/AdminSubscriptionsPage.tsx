@@ -46,8 +46,6 @@ interface ExpiringLicense {
   user: { id: number; name: string; email: string } | null;
 }
 
-const PAGE_SIZE = 20;
-
 export default function AdminSubscriptionsPage() {
   const { error } = useToast();
   const [users, setUsers] = useState<User[]>([]);
@@ -57,6 +55,7 @@ export default function AdminSubscriptionsPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const errorRef = useRef(error);
@@ -70,7 +69,7 @@ export default function AdminSubscriptionsPage() {
       setLoading(true);
       const params = new URLSearchParams();
       params.append("page", String(page));
-      params.append("limit", String(PAGE_SIZE));
+      params.append("limit", String(pageSize));
       if (search.trim()) params.append("search", search.trim());
       if (statusFilter !== "all") params.append("status", statusFilter);
 
@@ -101,7 +100,7 @@ export default function AdminSubscriptionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter]);
+  }, [page, pageSize, search, statusFilter]);
 
   const loadExpiringLicenses = useCallback(async () => {
     try {
@@ -481,11 +480,26 @@ export default function AdminSubscriptionsPage() {
               </table>
             </div>
           )}
-          {!loading && totalPages > 1 && (
+          {!loading && total > 0 && (
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-xs text-gray-600 dark:text-gray-400">
-                Sayfa {page} / {totalPages} ({total} kayıt)
-              </p>
+              <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+                <span>Sayfa başına</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  className={selectCls}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Sayfa {page} / {totalPages} ({total} kayıt)
+                </span>
+              </div>
               <div className="flex gap-1.5">
                 <Button
                   variant="outline"

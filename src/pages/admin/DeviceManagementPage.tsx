@@ -64,6 +64,8 @@ export default function DeviceManagementPage() {
   const [creating, setCreating] = useState(false);
   const [errMsg, setErrMsg] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Form
   const [maxDevices, setMaxDevices] = useState(1);
@@ -85,6 +87,7 @@ export default function DeviceManagementPage() {
       if (!res.ok) { setErrMsg(`Sunucu hatası: ${res.status}`); setLoading(false); return; }
       const data = await res.json();
       setLicenses(Array.isArray(data) ? data : data.licenses || []);
+      setCurrentPage(1);
     } catch { setErrMsg("Lisanslar yüklenirken hata oluştu"); }
     finally { setLoading(false); }
   };
@@ -123,6 +126,16 @@ export default function DeviceManagementPage() {
       (l.user_email?.toLowerCase().includes(q) ?? false) ||
       (l.user_name?.toLowerCase().includes(q) ?? false);
   });
+  const totalPages = Math.max(1, Math.ceil(filteredLicenses.length / pageSize));
+  const pagedLicenses = filteredLicenses.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   const inputCls = "w-full px-2.5 py-1.5 text-sm rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
@@ -227,7 +240,7 @@ export default function DeviceManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredLicenses.map((license) => {
+                  {pagedLicenses.map((license) => {
                     const isExpired = license.is_expired ?? (license.expires_at && new Date(license.expires_at) < new Date());
                     const lid = license.id ?? license.license_id;
                     return (
@@ -288,6 +301,44 @@ export default function DeviceManagementPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!loading && filteredLicenses.length > 0 && (
+            <div className="mt-3 flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-2">
+                <span>Sayfa başına</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="rounded border border-gray-200 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {filteredLicenses.length} lisans · Sayfa {currentPage}/{totalPages}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  className="px-2.5 py-1 rounded border border-gray-200 dark:border-gray-600 disabled:opacity-50"
+                >
+                  Önceki
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="px-2.5 py-1 rounded border border-gray-200 dark:border-gray-600 disabled:opacity-50"
+                >
+                  Sonraki
+                </button>
+              </div>
             </div>
           )}
         </div>

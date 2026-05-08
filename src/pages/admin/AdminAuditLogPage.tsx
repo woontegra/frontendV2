@@ -37,7 +37,7 @@ export default function AdminAuditLogPage() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [offset, setOffset] = useState(0);
-  const limit = 50;
+  const [limit, setLimit] = useState(10);
 
   const loadLogs = async (offsetOverride?: number) => {
     setLoading(true);
@@ -68,7 +68,7 @@ export default function AdminAuditLogPage() {
 
   useEffect(() => {
     loadLogs();
-  }, [offset]);
+  }, [offset, limit]);
 
   const handleFilter = () => {
     setOffset(0);
@@ -163,7 +163,24 @@ export default function AdminAuditLogPage() {
           )}
           {total > limit && (
             <div className="p-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <span className="text-xs text-gray-500 dark:text-gray-400">Toplam {total} kayıt</span>
+              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>Sayfa başına</span>
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value));
+                    setOffset(0);
+                  }}
+                  className={selectCls}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>
+                  Toplam {total} kayıt · Sayfa {Math.floor(offset / limit) + 1}/{Math.max(1, Math.ceil(total / limit))}
+                </span>
+              </div>
               <div className="flex gap-1.5">
                 <Button variant="outline" size="sm" className="h-7 text-xs px-2.5" disabled={offset === 0} onClick={() => setOffset((o) => Math.max(0, o - limit))}>
                   Önceki
@@ -171,6 +188,26 @@ export default function AdminAuditLogPage() {
                 <Button variant="outline" size="sm" className="h-7 text-xs px-2.5" disabled={offset + limit >= total} onClick={() => setOffset((o) => o + limit)}>
                   Sonraki
                 </Button>
+              </div>
+            </div>
+          )}
+          {total > 0 && total <= limit && (
+            <div className="p-2 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>Sayfa başına</span>
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value));
+                    setOffset(0);
+                  }}
+                  className={selectCls}
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>Toplam {total} kayıt · Sayfa 1/1</span>
               </div>
             </div>
           )}
